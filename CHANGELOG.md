@@ -20,6 +20,14 @@ new major if the snapshot or the JSON Lines format ever breaks.
   nothing is written or sent.
 - Window: Settings can check for updates each time the window opens (off by
   default). It is the same check as the button, and it installs nothing.
+- Named pipes (`-NamedPipes`): the collector now records the process that
+  exposes each writable pipe (name, PID and path), through one read-only
+  P/Invoke of `GetNamedPipeServerProcessId` (kernel32). The
+  `named_pipe_writable_by_everyone` finding names it ("Exposed by X (path)"),
+  which turns a bare pipe name into an actionable lead. The server process and
+  path are pseudonymized before anything reaches the AI step. The safety review
+  allows this one compiled-C# P/Invoke in the collector only and still rejects
+  any other `Add-Type -MemberDefinition`/`-TypeDefinition` or `DllImport`.
 
 ### Changed
 - Window: with no analysis in memory the AI buttons ask which existing report
@@ -35,16 +43,6 @@ new major if the snapshot or the JSON Lines format ever breaks.
   vendor with many products (CVE-2026-42897, an Exchange Server flaw listed as
   product "Microsoft") no longer matches everything of that vendor. The
   product now comes from the vulnerability title, so it matches Exchange only.
-
-### Added
-- Named pipes (`-NamedPipes`): the collector now records the process that
-  exposes each writable pipe (name, PID and path), through one read-only
-  P/Invoke of `GetNamedPipeServerProcessId` (kernel32). The
-  `named_pipe_writable_by_everyone` finding names it ("Exposed by X (path)"),
-  which turns a bare pipe name into an actionable lead. The server process and
-  path are pseudonymized before anything reaches the AI step. The safety review
-  allows this one compiled-C# P/Invoke in the collector only and still rejects
-  any other `Add-Type -MemberDefinition`/`-TypeDefinition` or `DllImport`.
 
 ## [2.3] - 2026-10-30
 ### Changed

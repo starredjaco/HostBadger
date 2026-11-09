@@ -41,7 +41,9 @@ the whole fleet in one report, or one report per host.
   community.chocolatey.org), `-CveOnline` (downloads CVEs and EPSS scores,
   services.nvd.nist.gov and epss.empiricalsecurity.com), `-ExtensionsOnline`
   (downloads the list of browser extensions removed from the stores,
-  raw.githubusercontent.com) and `-SendToAI` (Gemini). Each one is named where it is offered.
+  raw.githubusercontent.com), `-ExploitsOnline` (downloads the Metasploit and
+  Exploit-DB references, raw.githubusercontent.com and gitlab.com) and
+  `-SendToAI` (Gemini). Each one is named where it is offered.
   `Test-HostBadgerSafety.ps1` proves the rest from the code.
 - **Honest about gaps**: what could not be read is listed as *not evaluated*,
   never as clean.
@@ -109,6 +111,14 @@ should.
   exploitation), and names the release that fixes them all. NVD has a backlog
   of CVEs without version data, so the newest ones can be missing. About 2.5
   minutes without an NVD API key (`NVD_API_KEY` makes it faster).
+  With `-ExploitsOnline` (or `-ExploitFile`) the same findings also note which
+  of those CVEs have a ready [Metasploit](https://github.com/rapid7/metasploit-framework)
+  module or an [Exploit-DB](https://www.exploit-db.com) entry, to patch the
+  exploited ones first: a prioritization signal like KEV and EPSS, kept as
+  references only (the module name and the Exploit-DB id, never exploit code),
+  and a ready Metasploit exploit module raises the finding to High. The two
+  reference lists are downloaded whole (raw.githubusercontent.com and
+  gitlab.com), the same whatever the hosts have, so the requests reveal nothing.
 - **Vulnerable and malicious drivers**: the SHA-256 of every kernel driver file
   is matched against the [LOLDrivers](https://www.loldrivers.io) catalog
   (Apache License 2.0) of drivers used in "bring your own vulnerable driver"
@@ -214,7 +224,10 @@ should.
   Every check also says **what an attacker can do with it** ("Attacks it
   enables": NTLM relay to SMB, credential dumping, privilege escalation to
   SYSTEM...), in the report, the `Attacks` CSV column and the `attacks` JSON
-  Lines field.
+  Lines field. The checks with a well-known offensive-tool association also name
+  the **tools attackers use** against them (Responder, Mimikatz, Impacket,
+  NetExec, PowerUp...), threat-informed context for defenders to expect and
+  detect, in the report, the `Tools` CSV column and the `tools` JSON Lines field.
 - **One report per host** with `-PerHost`, or one fleet report.
 - **Comparison with an earlier run** (new and resolved findings) and **accepted
   risks** with an owner and an expiry.
@@ -827,8 +840,10 @@ or, without one, when they have the same title.
   (epss.empiricalsecurity.com, `-CveOnline`), one GET of the list of browser
   extensions removed from the stores
   (raw.githubusercontent.com/toborrm9/malicious_extension_sentry/main/malicious_extensions_detailed.csv,
-  `-ExtensionsOnline`) and the Gemini call
-  (`-SendToAI`). The code that sends or
+  `-ExtensionsOnline`), one GET each of the Metasploit module metadata
+  (raw.githubusercontent.com/rapid7/metasploit-framework) and the Exploit-DB
+  index (gitlab.com/exploit-database/exploitdb, `-ExploitsOnline`) and the
+  Gemini call (`-SendToAI`). The code that sends or
   downloads lives in `lib\AI.ps1` only. `Test-HostBadgerSafety.ps1` checks all this from the code
   and fails on any command that is not on its reviewed list. The regression
   suite runs it on the real code and on a tampered copy.
@@ -912,6 +927,7 @@ standard user with Defender in passive mode.
     [-EolFile r_eol.json] | [-EolOnline] [-SoftwareGraceDays 30]   # software lifecycle data (-EolOnline downloads it from endoflife.date): current end-of-support dates and software_outdated
     [-ChocoFile r_choco.json] | [-ChocoOnline]   # program versions from community.chocolatey.org (7-Zip, VLC, Git, GIMP, WinSCP, PuTTY...) for software_outdated
     [-CveFile r_cve.json] | [-CveOnline]         # CVEs from services.nvd.nist.gov and EPSS scores from epss.empiricalsecurity.com, for software_cve
+    [-ExploitFile r_exploits.json] | [-ExploitsOnline]   # Metasploit and Exploit-DB references for the CVEs above (raw.githubusercontent.com, gitlab.com); a ready Metasploit exploit raises the finding to High
     [-ExtensionsFile r_extensions.json] | [-ExtensionsOnline]   # browser extensions removed from the stores (-ExtensionsOnline downloads them from raw.githubusercontent.com)
     [-Nis2Acn]                                   # Italy: add the NIS2 basic security measures of ACN (Determinazione 379907/2025) to the report and JSON Lines
     [-SnapshotPassword <SecureString>] [-SnapshotPfx <file.pfx> [-SnapshotPfxPassword <SecureString>]]   # open encrypted .hbx snapshots (asked for when missing)

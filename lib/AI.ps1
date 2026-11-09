@@ -545,9 +545,11 @@ function Invoke-HttpPostWithSpinner {
 # CISA Known Exploited Vulnerabilities (-KevOnline), LOLDrivers (-DriversOnline, about 30 MB) and the
 # endoflife.date software lifecycle data (-EolOnline, about 3 MB), the Chocolatey community package
 # versions (-ChocoOnline), the NVD CVEs and FIRST EPSS scores (-CveOnline), and the browser extensions
-# removed from the stores (-ExtensionsOnline, about 2 MB). HOSTBADGER_KEV_URL, HOSTBADGER_DRIVERS_URL,
-# HOSTBADGER_EOL_URL, HOSTBADGER_CHOCO_URL, HOSTBADGER_NVD_URL, HOSTBADGER_EPSS_URL and
-# HOSTBADGER_EXTENSIONS_URL are the test hooks (the regression runs a local listener).
+# removed from the stores (-ExtensionsOnline, about 2 MB), and the public-exploit references (Metasploit
+# modules and the Exploit-DB index, -ExploitsOnline). HOSTBADGER_KEV_URL, HOSTBADGER_DRIVERS_URL,
+# HOSTBADGER_EOL_URL, HOSTBADGER_CHOCO_URL, HOSTBADGER_NVD_URL, HOSTBADGER_EPSS_URL,
+# HOSTBADGER_EXTENSIONS_URL, HOSTBADGER_MSF_URL and HOSTBADGER_EXPLOITDB_URL are the test hooks
+# (the regression runs a local listener).
 # --------------------------------------------------------------------------
 $script:KevFeedUrl = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json'
 $script:LolDriversUrl = 'https://www.loldrivers.io/api/drivers.json'
@@ -556,6 +558,8 @@ $script:ChocoApiUrl = 'https://community.chocolatey.org/api/v2/'
 $script:NvdApiUrl = 'https://services.nvd.nist.gov/rest/json/cves/2.0'
 $script:EpssUrl = 'https://epss.empiricalsecurity.com/epss_scores-current.csv.gz'
 $script:ExtensionSentryUrl = 'https://raw.githubusercontent.com/toborrm9/malicious_extension_sentry/main/malicious_extensions_detailed.csv'
+$script:MsfMetadataUrl = 'https://raw.githubusercontent.com/rapid7/metasploit-framework/master/db/modules_metadata_base.json'
+$script:ExploitDbUrl = 'https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv'
 # The analyzer on the main branch of the HostBadger repository: "Check for updates" in the window of a
 # copy that is not a git clone reads its version line (the test hook HOSTBADGER_UPDATE_URL replaces it).
 $script:HostBadgerMainUrl = 'https://raw.githubusercontent.com/g4bri-3l3/HostBadger/main/HostBadger.ps1'
@@ -612,6 +616,21 @@ function Get-ExtensionCatalogOnline {
     param([int]$TimeoutSeconds = 120)
     $uri = if ($env:HOSTBADGER_EXTENSIONS_URL) { $env:HOSTBADGER_EXTENSIONS_URL } else { $script:ExtensionSentryUrl }
     return Get-CatalogText -Uri $uri -Label 'browser extensions' -TimeoutSeconds $TimeoutSeconds
+}
+
+# Public-exploit references (-ExploitsOnline): the full Metasploit module metadata (raw.githubusercontent.com,
+# BSD-3) and the full Exploit-DB index (gitlab.com, GPLv2 data). Both lists are downloaded whole, the same
+# whatever the hosts have, so the requests reveal nothing. The caller reduces them to a CVE -> references
+# map (ConvertTo-ExploitIndex in lib\Checks.ps1); only module names and Exploit-DB ids are kept, never
+# exploit code. HOSTBADGER_MSF_URL and HOSTBADGER_EXPLOITDB_URL are the test hooks. Returns @{ Msf; Edb }
+# (the raw text of each), or nothing for a list that did not come back.
+function Get-ExploitCatalogOnline {
+    param([int]$TimeoutSeconds = 180)
+    $msfUri = if ($env:HOSTBADGER_MSF_URL) { $env:HOSTBADGER_MSF_URL } else { $script:MsfMetadataUrl }
+    $edbUri = if ($env:HOSTBADGER_EXPLOITDB_URL) { $env:HOSTBADGER_EXPLOITDB_URL } else { $script:ExploitDbUrl }
+    $msf = Get-CatalogText -Uri $msfUri -Label 'Metasploit modules' -TimeoutSeconds $TimeoutSeconds
+    $edb = Get-CatalogText -Uri $edbUri -Label 'Exploit-DB index' -TimeoutSeconds $TimeoutSeconds
+    return @{ Msf = $msf; Edb = $edb }
 }
 
 # Chocolatey community package versions (-ChocoOnline): for each package of $script:ChocoProductMap

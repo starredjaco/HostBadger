@@ -497,8 +497,8 @@ $script:CheckCatalog = [ordered]@{
         Remediation = 'Upgrade to a supported release, or uninstall it if nothing needs it. A Visual C++ runtime may be needed by an old program: remove it with that program. For SQL Server, Extended Security Updates can cover the gap while the upgrade is planned (add an exception if the host is enrolled).' }
     software_cve = @{ Category = 'Software'; Severity = 'Medium'; Mitre = 'T1203'; Needs = @('software'); Roles = $script:AllRoles
         Title = 'Installed software version with known vulnerabilities'
-        Description = 'The installed version of a program falls in the vulnerable version range of CVEs that NVD had published before the snapshot was taken. One finding per program, with the count, the highest CVSS score, the CVEs CISA lists as exploited (KEV, from the date they were added) and the highest EPSS score (probability of exploitation in the next 30 days, FIRST). High when one is in KEV, CVSS 9.0 or more or EPSS 0.1 or more; Medium for CVSS 7.0 or EPSS 0.01; Low otherwise. Covers Python, Node.js, .NET, Notepad++, PowerShell 7, VirtualBox, Wireshark, 7-Zip, VLC, Git, GIMP, WinSCP, PuTTY, FileZilla, KeePass, Audacity, Mullvad VPN and AnyDesk; NVD has a backlog of CVEs without version data, so a very recent CVE can be missing (never a false alarm from that). Only present when the data was given (-CveFile or -CveOnline).'
-        Remediation = 'Update the program to the release named in Expected (or later), starting with the ones whose CVEs are in KEV or have a high EPSS score. If the program is not needed, uninstall it.' }
+        Description = 'The installed version of a program falls in the vulnerable version range of CVEs that NVD had published before the snapshot was taken. One finding per program, with the count, the highest CVSS score, the CVEs CISA lists as exploited (KEV, from the date they were added) and the highest EPSS score (probability of exploitation in the next 30 days, FIRST). High when one is in KEV, CVSS 9.0 or more or EPSS 0.1 or more; Medium for CVSS 7.0 or EPSS 0.01; Low otherwise. With a public-exploit catalog (-ExploitsOnline / -ExploitFile) the detail also names the Metasploit module(s) and Exploit-DB entries for these CVEs, as a prioritization signal, and a ready Metasploit exploit module raises the finding to High. Covers Python, Node.js, .NET, Notepad++, PowerShell 7, VirtualBox, Wireshark, 7-Zip, VLC, Git, GIMP, WinSCP, PuTTY, FileZilla, KeePass, Audacity, Mullvad VPN and AnyDesk; NVD has a backlog of CVEs without version data, so a very recent CVE can be missing (never a false alarm from that). Only present when the data was given (-CveFile or -CveOnline).'
+        Remediation = 'Update the program to the release named in Expected (or later), starting with the ones whose CVEs are in KEV, have a published exploit or a high EPSS score. If the program is not needed, uninstall it.' }
     software_outdated = @{ Category = 'Software'; Severity = 'Low'; Mitre = 'T1203'; Needs = @('software'); Roles = $script:AllRoles
         Title = 'Installed software behind the latest release of its line'
         Description = 'The release line of an installed program is still maintained, but a newer version of that line came out before the snapshot was taken, with the security fixes since the installed one. For products that ship every few weeks (Firefox, Chrome, Notepad++) a line that has already been replaced counts here too. A release counts only once it is older than the grace period (-SoftwareGraceDays, 30 days), so a host waiting for its normal update is not flagged; a host several releases behind a recent one (8.9.1 when 8.9.8.1 is out) is flagged anyway, Low. Medium when the missing release is more than 180 days old. A SQL Server instance is judged on its own branch: the latest cumulative update, or the latest security-only (GDR) build for an instance that takes only those. For 7-Zip, VLC, Git, GIMP, WinSCP, PuTTY, FileZilla, KeePass, Audacity, Mullvad VPN, OBS Studio and AnyDesk the versions and their dates come from the Chocolatey community repository, and the grace period counts from the first newer release. Only present when endoflife.date data (-EolFile or -EolOnline) or Chocolatey data (-ChocoFile or -ChocoOnline) was given.'
@@ -1175,6 +1175,64 @@ $script:CheckAttacks = [ordered]@{
 }
 foreach ($t in @($script:CheckAttacks.Keys)) { if ($script:CheckCatalog.Contains($t)) { $script:CheckCatalog[$t]['Attacks'] = $script:CheckAttacks[$t] } }
 
+# Offensive tooling publicly associated with a weakness: the named, well-documented tools a red team
+# (or an attacker) reaches for against it, shown as "Tools attackers use" in the report and written as
+# tools in CSV and JSON Lines. This is threat-informed context for defenders (which tools to expect and
+# detect), not instructions: no usage, no commands. Only the checks with a clear, publicly known tool
+# association have an entry; the rest have none. Every key must be a check in the catalog (the
+# regression checks it).
+$script:CheckTools = [ordered]@{
+    wdigest_cleartext              = 'Mimikatz, pypykatz, lsassy (read the clear-text password from LSASS memory).'
+    lsa_not_protected              = 'Mimikatz, pypykatz, nanodump, comsvcs.dll MiniDump (dump LSASS when it is not RunAsPPL).'
+    credential_guard_off           = 'Mimikatz, lsassy (harvest NTLM hashes and Kerberos tickets that Credential Guard would isolate).'
+    cached_logons_high            = 'Mimikatz (dump the cached domain credentials), hashcat (crack the MSCACHEv2 hashes offline).'
+    lm_hash_stored                 = 'Impacket secretsdump, hashcat (recover the weak LM hashes).'
+    ntlm_weak_lmcompat             = 'Responder, Impacket ntlmrelayx (capture and relay NTLMv1/LM responses).'
+    llmnr_enabled                  = 'Responder, Inveigh (poison LLMNR name resolution to capture NTLM authentication).'
+    netbios_enabled                = 'Responder, Inveigh (poison NBT-NS to capture NTLM authentication).'
+    mdns_enabled                   = 'Responder, Inveigh (poison mDNS to capture NTLM authentication).'
+    wpad_not_disabled              = 'Responder (serve a rogue WPAD proxy to capture credentials).'
+    smb_server_signing_not_required = 'Impacket ntlmrelayx, Responder (relay captured NTLM authentication to the host).'
+    smb_client_signing_not_required = 'Impacket ntlmrelayx (relay NTLM to this client-trusting host).'
+    ldap_server_signing_off        = 'Impacket ntlmrelayx (relay NTLM to LDAP against a DC without signing).'
+    ldap_client_signing_off        = 'Impacket ntlmrelayx (LDAP relay when the client does not require signing).'
+    smb1_server_enabled            = 'Metasploit (the EternalBlue family of SMBv1 modules), nmap smb-vuln scripts.'
+    anonymous_shares_enum          = 'enum4linux-ng, rpcclient, NetExec (CrackMapExec) (enumerate shares and users anonymously).'
+    null_session_access            = 'enum4linux-ng, rpcclient (read account and share information over a null session).'
+    anonymous_sam_enum             = 'Impacket lookupsid, rpcclient (enumerate accounts and RIDs anonymously).'
+    rdp_nla_disabled               = 'Seth, PyRDP (man-in-the-middle an RDP session that does not require NLA).'
+    guest_enabled                  = 'NetExec (CrackMapExec) (authenticate and enumerate as the Guest account).'
+    builtin_admin_enabled          = 'NetExec (CrackMapExec), Impacket psexec (pass-the-hash to the built-in administrator).'
+    laps_not_configured            = 'NetExec (CrackMapExec), Impacket psexec (reuse one shared local administrator password across hosts).'
+    local_admin_password_shared    = 'NetExec (CrackMapExec) (spray the shared local administrator hash across the fleet).'
+    kerberos_rc4_allowed           = 'Rubeus, Impacket GetUserSPNs (Kerberoast), hashcat (crack the RC4 service tickets).'
+    dc_netlogon_policy_weak        = 'Impacket (the Zerologon, CVE-2020-1472, check and reset modules).'
+    spooler_on_dc                  = 'Impacket (the PrinterBug coercion), Coercer (force the DC to authenticate).'
+    secure_channel_unprotected     = 'Impacket, Coercer (authentication coercion over an unsigned secure channel).'
+    vulnerable_driver_present      = 'KDMapper, the bring-your-own-vulnerable-driver technique (load the signed vulnerable driver to run kernel code).'
+    service_unquoted_path          = 'PowerUp, WinPEAS, SharpUp (find and plant a binary in the unquoted service path).'
+    service_binary_writable        = 'PowerUp, WinPEAS, SharpUp (replace the writable service binary to run as its account).'
+    service_permissions_weak       = 'PowerUp, SharpUp (reconfigure the service a standard user may change).'
+    task_binary_writable           = 'PowerUp, WinPEAS (replace the writable scheduled-task binary).'
+    autorun_writable               = 'PowerUp, WinPEAS (plant in a writable autorun location).'
+    system_path_writable           = 'PowerUp (hijack a binary from a writable directory on the system PATH).'
+    always_install_elevated        = 'PowerUp, msfvenom-built MSI (install a package that runs as SYSTEM).'
+    uac_disabled                   = 'UACMe (bypass or abuse the absent User Account Control prompt).'
+    uac_admin_no_prompt            = 'UACMe (auto-elevate without a consent prompt).'
+    printer_drivers_by_users       = 'Metasploit, the PrintNightmare (CVE-2021-34527) tooling (load a driver as a standard user).'
+    unattend_credentials           = 'PowerUp, WinPEAS (read the credentials left in the answer file).'
+    gpp_cpassword_cached           = 'Get-GPPPassword, Metasploit smb_enum_gpp (decrypt the cached Group Policy Preferences password).'
+    powershell_history_secrets     = 'WinPEAS, manual review (recover secrets from the PowerShell history file).'
+    network_credentials_stored     = 'Mimikatz (dpapi::cred), SharpDPAPI (decrypt the saved Credential Manager entries).'
+    credential_manager_saved       = 'SharpDPAPI, Mimikatz (recover DPAPI-protected stored credentials).'
+    persistence_ssh_authorized_keys = 'manual review (an attacker-controlled key in authorized_keys grants remote access).'
+    autostart_suspicious_command   = 'Autoruns, manual review (an autostart entry running a living-off-the-land command).'
+    credssp_encryption_oracle_weak = 'Metasploit, the CVE-2018-0886 CredSSP man-in-the-middle tooling.'
+    winrm_trusted_hosts_any        = 'Evil-WinRM (connect over WinRM where any host is trusted).'
+    remote_access_tool             = 'the remote-access tool itself (AnyDesk, TeamViewer, ScreenConnect) reused for hands-on-keyboard access.'
+}
+foreach ($t in @($script:CheckTools.Keys)) { if ($script:CheckCatalog.Contains($t)) { $script:CheckCatalog[$t]['Tools'] = $script:CheckTools[$t] } }
+
 # Microsoft's "standard protection" ASR rules, recommended for every device.
 $script:OtherAsrRules = [ordered]@{
     '7674ba52-37eb-4a4f-a9a1-f0f9a1619a2c' = 'Block Adobe Reader from creating child processes'
@@ -1383,6 +1441,7 @@ function Add-Finding {
             Found    = $Found
             Expected = $Expected
             Attacks  = "$($meta.Attacks)"
+            Tools    = "$($meta.Tools)"
             NoScore  = [bool]$NoScore
         })
 }
@@ -1978,6 +2037,98 @@ function ConvertTo-CveCatalogJson {
     return ($doc | ConvertTo-Json -Depth 8)
 }
 
+# Public-exploit references (-ExploitsOnline / -ExploitFile): whether a known vulnerability (CVE) has a
+# ready Metasploit module or an Exploit-DB entry. Like KEV and EPSS, this is a prioritization signal
+# only: HostBadger keeps references (the module's name, the Exploit-DB id), never exploit code, and
+# does nothing with them but raise the urgency of a CVE that software_cve already found by version.
+# Metasploit: rapid7/metasploit-framework db/modules_metadata_base.json (BSD-3), one object per module,
+# whose "references" list its CVE(s). Exploit-DB: exploit-database files_exploits.csv (GPLv2 data), one
+# row per entry, whose "codes" column lists the CVE(s) it is for. Both are keyed here by CVE id.
+function ConvertFrom-MsfMetadata {
+    param([string]$Json)
+    # The file has no case-colliding keys, but it is large: 5.1 reads it with JavaScriptSerializer like
+    # the LOLDrivers catalog, PowerShell 7 as a hashtable.
+    if ($PSVersionTable.PSVersion.Major -ge 7) { $doc = ConvertFrom-Json -InputObject $Json -AsHashtable -Depth 64 }
+    else {
+        Add-Type -AssemblyName System.Web.Extensions
+        $ser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+        $ser.MaxJsonLength = [int]::MaxValue; $ser.RecursionLimit = 256
+        $doc = $ser.DeserializeObject($Json)
+    }
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($key in @($doc.Keys)) {
+        $m = $doc[$key]
+        $full = "$($m['fullname'])"; if (-not $full) { $full = "$key" }
+        $type = "$($m['type'])"
+        foreach ($ref in @($m['references'])) {
+            $r = "$ref".ToUpper()
+            if ($r -match '^CVE-\d{4}-\d{4,}$') { $out.Add([PSCustomObject]@{ Cve = $r; Module = $full; Type = $type }) }
+        }
+    }
+    return $out.ToArray()
+}
+
+function ConvertFrom-ExploitDbCsv {
+    param([string]$Csv)
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($r in @($Csv | ConvertFrom-Csv)) {
+        $codes = "$($r.codes)"
+        if ($codes -notmatch '(?i)CVE-') { continue }
+        $verified = ("$($r.verified)" -eq '1')
+        foreach ($m in [regex]::Matches($codes.ToUpper(), 'CVE-\d{4}-\d{4,}')) {
+            $out.Add([PSCustomObject]@{ Cve = $m.Value; Id = "$($r.id)"; Verified = $verified })
+        }
+    }
+    return $out.ToArray()
+}
+
+# CVE id -> @{ msf = @(@{ module; type }); edb = @(ids) }, from the two reference lists, deduped.
+function ConvertTo-ExploitIndex {
+    param($Msf, $Edb)
+    $msfByCve = @{}; $edbByCve = @{}
+    foreach ($e in @($Msf | Where-Object { $_ })) {
+        if (-not $msfByCve.ContainsKey($e.Cve)) { $msfByCve[$e.Cve] = [ordered]@{} }
+        if (-not $msfByCve[$e.Cve].Contains($e.Module)) { $msfByCve[$e.Cve][$e.Module] = "$($e.Type)" }
+    }
+    foreach ($e in @($Edb | Where-Object { $_ })) {
+        if (-not $edbByCve.ContainsKey($e.Cve)) { $edbByCve[$e.Cve] = [ordered]@{} }
+        $edbByCve[$e.Cve][$e.Id] = $true
+    }
+    $cves = @(@($msfByCve.Keys) + @($edbByCve.Keys) | Select-Object -Unique)
+    $idx = @{}
+    foreach ($c in $cves) {
+        $msf = @(if ($msfByCve.ContainsKey($c)) { foreach ($mod in $msfByCve[$c].Keys) { [ordered]@{ module = "$mod"; type = "$($msfByCve[$c][$mod])" } } })
+        $edb = @(if ($edbByCve.ContainsKey($c)) { @($edbByCve[$c].Keys | ForEach-Object { "$_" }) })
+        $idx[$c] = @{ msf = $msf; edb = $edb }
+    }
+    return $idx
+}
+
+function ConvertTo-ExploitCatalogJson {
+    param($Index, [string]$Source)
+    $entries = foreach ($c in @($Index.Keys | Sort-Object)) {
+        [ordered]@{ cve = $c; msf = @($Index[$c].msf); edb = @($Index[$c].edb) }
+    }
+    $doc = [ordered]@{ source = $Source; count = @($entries).Count; entries = @($entries) }
+    # 5.1 writes an empty array inside a hashtable as {}: ConvertFrom-ExploitCatalog guards for it, but
+    # keep the file clean too (one of msf/edb can be empty when only the other names the CVE).
+    return (($doc | ConvertTo-Json -Depth 6) -replace '":\s*\{\}', '": []')
+}
+
+function ConvertFrom-ExploitCatalog {
+    param([string]$Json)
+    $doc = ConvertFrom-Json -InputObject $Json
+    $idx = @{}
+    foreach ($e in @($doc.entries | ForEach-Object { $_ })) {
+        if (-not "$($e.cve)") { continue }
+        $idx["$($e.cve)".ToUpper()] = @{
+            msf = @($e.msf | Where-Object { $_ -and $_.module } | ForEach-Object { [ordered]@{ module = "$($_.module)"; type = "$($_.type)" } })
+            edb = @($e.edb | Where-Object { $_ } | ForEach-Object { "$_" })
+        }
+    }
+    return $idx
+}
+
 function Get-VersionNumbers {
     # The numbers of a version in order, without build metadata ("25.0.4.1+1" -> 25, 0, 4, 1).
     param([string]$Version)
@@ -2105,6 +2256,27 @@ function Invoke-SoftwareChecks {
                     $parts.Add("highest CVSS $(if ($maxScore -gt 0) { $maxScore.ToString('0.0', [Globalization.CultureInfo]::InvariantCulture) } else { 'not scored' }) ($($byScore[0].id))")
                     if ($kev.Count -gt 0) { $parts.Add("$($kev.Count) in the CISA KEV catalog of exploited vulnerabilities ($((@($kev | Select-Object -First 3 | ForEach-Object { $_.id })) -join ', '))") }
                     if ($byEpss.Count -gt 0) { $parts.Add("highest EPSS $($maxEpss.ToString('0.000', [Globalization.CultureInfo]::InvariantCulture)) ($($byEpss[0].id)$(if ($Config.Cve.EpssDate) { ", scores of $($Config.Cve.EpssDate)" }))") }
+                    # Public-exploit references for these CVEs (-ExploitsOnline / -ExploitFile): the names
+                    # of the Metasploit module(s) and the Exploit-DB id(s), as a prioritization signal. A
+                    # ready Metasploit exploit module raises the finding to High, like a CVE in KEV.
+                    if ($Config.Exploits) {
+                        $exMsf = New-Object System.Collections.Generic.List[string]
+                        $exEdb = New-Object System.Collections.Generic.List[string]
+                        $exploitModule = $false
+                        foreach ($eh in $hits) {
+                            $ex = $Config.Exploits["$($eh.id)"]
+                            if (-not $ex) { continue }
+                            foreach ($mod in @($ex.msf)) { if ("$($mod.module)" -and -not $exMsf.Contains("$($mod.module)")) { $exMsf.Add("$($mod.module)") }; if ("$($mod.type)" -eq 'exploit') { $exploitModule = $true } }
+                            foreach ($id in @($ex.edb)) { $e = "EDB-$id"; if (-not $exEdb.Contains($e)) { $exEdb.Add($e) } }
+                        }
+                        if ($exMsf.Count -gt 0 -or $exEdb.Count -gt 0) {
+                            $exParts = New-Object System.Collections.Generic.List[string]
+                            if ($exMsf.Count -gt 0) { $exParts.Add("Metasploit $(if ($exMsf.Count -eq 1) { 'module' } else { "modules ($($exMsf.Count))" }) $((@($exMsf | Select-Object -First 3)) -join ', ')$(if ($exMsf.Count -gt 3) { ", +$($exMsf.Count - 3) more" })") }
+                            if ($exEdb.Count -gt 0) { $exParts.Add("Exploit-DB $((@($exEdb | Select-Object -First 3)) -join ', ')$(if ($exEdb.Count -gt 3) { ", +$($exEdb.Count - 3) more" })") }
+                            $parts.Add("public exploit published ($($exParts -join '; '))")
+                            if ($exploitModule) { $sev = 'High' }
+                        }
+                    }
                     $worst = @($byScore | Select-Object -First 5 | ForEach-Object { $_.id }) -join ', '
                     $vver = if ("$($sw.version)") { "version $($sw.version)" } else { 'no version recorded' }
                     & $emit 'software_cve' "software: $($ip.Label)" $sev ("Installed as {0} ({1}). {2} known vulnerabilit{3} published before collection affect{8} {4} {5} (NVD): {6}. Worst: {7}." -f $sw.name, $vver, $hits.Count, $(if ($hits.Count -eq 1) { 'y' } else { 'ies' }), $ip.Label, $ip.Version, ($parts -join '; '), $worst, $(if ($hits.Count -eq 1) { 's' } else { '' })) "$($ip.Version): $($hits.Count) CVE" $(if ($fix) { "$fix or later" } else { 'a release that fixes them' })

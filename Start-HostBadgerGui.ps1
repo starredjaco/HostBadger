@@ -63,6 +63,7 @@ $script:GuiCatalogs = [ordered]@{
     Eol     = @{ Label = 'Software lifecycle'; Suffix = 'eol'; Online = 'EolOnline'; File = 'EolFile'; Site = 'endoflife.date'; Shipped = 'table' }
     Choco   = @{ Label = 'Program versions'; Suffix = 'choco'; Online = 'ChocoOnline'; File = 'ChocoFile'; Site = 'community.chocolatey.org'; Shipped = '' }
     Cve     = @{ Label = 'CVEs and EPSS'; Suffix = 'cve'; Online = 'CveOnline'; File = 'CveFile'; Site = 'services.nvd.nist.gov, epss.empiricalsecurity.com'; Shipped = '' }
+    Exploits = @{ Label = 'Public exploits'; Suffix = 'exploits'; Online = 'ExploitsOnline'; File = 'ExploitFile'; Site = 'raw.githubusercontent.com, gitlab.com'; Shipped = '' }
     Ext     = @{ Label = 'Malicious browser extensions'; Suffix = 'extensions'; Online = 'ExtensionsOnline'; File = 'ExtensionsFile'; Site = 'raw.githubusercontent.com'; Shipped = 'data\malicious-extensions.json' }
 }
 # The settings modes of a catalog (as in menu 8), for the Settings window.
@@ -1225,7 +1226,7 @@ function Show-Results {
                 $rows.Add([pscustomobject]@{
                         Severity = "$($r.Severity)"; Rank = [int]$script:SevRank["$($r.Severity)"]; Title = "$($r.Title)"; Category = "$($r.Category)"; Host = "$($r.Host)"
                         Object = "$($r.Object)"; Detail = "$($r.Detail)"; Type = "$($r.Type)"; Mitre = "$($r.Mitre)"; Cis = "$($r.Cis)"; CisBenchmark = "$($r.CisBenchmark)"
-                        Found = "$($r.Found)"; Expected = "$($r.Expected)"; Attacks = "$($r.Attacks)"; Stig = ("$($r.Category)" -eq 'DISA STIG'); Text = $text
+                        Found = "$($r.Found)"; Expected = "$($r.Expected)"; Attacks = "$($r.Attacks)"; Tools = "$($r.Tools)"; Stig = ("$($r.Category)" -eq 'DISA STIG'); Text = $text
                     })
             }
         }
@@ -1638,6 +1639,7 @@ function Show-ResultDetail {
     Add-ResultField 'Expected' $F.Expected
     if ($info) { Add-ResultField 'Why it matters' $info.Description }
     Add-ResultField 'How an attacker uses it' $F.Attacks
+    Add-ResultField 'Tools attackers use' $F.Tools
     if ($info) { Add-ResultField 'How to fix' $info.Remediation }
     if ($F.Cis) { Add-ResultField 'CIS rule' "$(if ($F.CisBenchmark) { "$($F.CisBenchmark), " })$($F.Cis)" }
     Add-ResultField 'MITRE ATT&CK' $F.Mitre

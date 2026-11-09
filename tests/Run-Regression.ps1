@@ -666,6 +666,10 @@ Assert-Equal (@($script:CheckCatalog.Keys | Where-Object { $_ -like 'stig_*' -an
 Assert-Equal ((@($script:CheckCatalog.Keys | Where-Object { -not "$($script:CheckCatalog[$_].Attacks)".Trim() }) + @($script:CheckAttacks.Keys | Where-Object { -not $script:CheckCatalog.Contains($_) })) -join ',') '' 'attacks: every check has its "Attacks it enables" text, and every text belongs to a check'
 Assert-True (@($jl | Where-Object { -not $_.attacks }).Count -eq 0 -and @($jl | Where-Object { $_.check -eq 'wdigest_cleartext' })[0].attacks -match 'mimikatz' -and $csvFe[0].Attacks -match '^Clear-text password theft') 'attacks: in every JSON Lines finding and in the CSV'
 Assert-True ($remHtml -match '<div class="kv attacks"><b>Attacks it enables\.</b> Clear-text password theft') 'attacks: shown under each check of the report'
+# Tools attackers use: the checks with a known offensive-tool association carry it into the report, CSV and JSON Lines.
+Assert-Equal (@($script:CheckTools.Keys | Where-Object { -not $script:CheckCatalog.Contains($_) }) -join ',') '' 'tools: every CheckTools entry is a check in the catalog'
+Assert-True (@($jl | Where-Object { $_.check -eq 'wdigest_cleartext' })[0].tools -match 'Mimikatz' -and $csvFe[0].Tools -match 'Mimikatz') 'tools: in JSON Lines and the CSV for a check that has them'
+Assert-True ($remHtml -match '<div class="kv tools"><b>Tools attackers use\.</b> Mimikatz') 'tools: shown under a check of the report'
 $feHtml = [System.IO.File]::ReadAllText((Join-Path $out 'r.html'))
 Assert-True ($feHtml -match '<th>Found</th><th>Required</th>' -and $feHtml -match '<td class="found">not configured</td>') 'found/expected: report columns'
 
@@ -881,7 +885,7 @@ $wizDir = Join-Path $work 'wizard'; New-Item -ItemType Directory -Path $wizDir -
 $launcher = Join-Path $root 'Start-HostBadger.ps1'
 # The remediation question follows JSON Lines: "y" and Enter on the folder (next to the report) when the
 # offer is "n", plain Enter (no) otherwise.
-$wizAnswers = { param($offer) (@('2', $fleet, (Join-Path $wizDir 'w.html'), '', '', '', '', '', '', 'n', '', '', '', '', '') + $(if ($offer -eq 'n') { @('y', '') } else { @('') }) + @('', '', '', '', '', '', $offer) + $(if ($offer -eq 'd') { @('', (Join-Path $wizDir 'w_prompt.txt')) } else { @() }) + @('q')) -join "`n" }
+$wizAnswers = { param($offer) (@('2', $fleet, (Join-Path $wizDir 'w.html'), '', '', '', '', '', '', 'n', '', '', '', '', '', '') + $(if ($offer -eq 'n') { @('y', '') } else { @('') }) + @('', '', '', '', '', '', $offer) + $(if ($offer -eq 'd') { @('', (Join-Path $wizDir 'w_prompt.txt')) } else { @() }) + @('q')) -join "`n" }
 # Run from the test folder: the launcher offers catalogs kept in .\output, and the project's own output
 # folder may hold real ones.
 Push-Location $wizDir
@@ -890,7 +894,7 @@ try {
     $wizNoPrompt = Test-Path (Join-Path $wizDir 'w_prompt.txt')
     $wizDry = (& $wizAnswers 'd') | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
     # Before the run every answer is listed and can be changed: 4 flips "DISA STIG rules", Enter runs.
-    $wizEdit = (@('2', $fleet, (Join-Path $wizDir 'e.html'), '', '', '', '', '', '', 'n', '', '', '', '', '', '', '', '', '', '', '', '4', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
+    $wizEdit = (@('2', $fleet, (Join-Path $wizDir 'e.html'), '', '', '', '', '', '', 'n', '', '', '', '', '', '', '', '', '', '', '', '', '4', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
 }
 finally { Pop-Location }
 Assert-True ($wizNo -match 'Not running as administrator|Running as administrator' -and $wizNo -notmatch 'Restart this menu as administrator') 'launcher: says up front whether it runs as administrator (the restart is offered only at an interactive console)'
@@ -915,8 +919,8 @@ Copy-Item (Join-Path $fleet 'hostsnapshot_weak.json') (Join-Path $scanDir 'snaps
 Copy-Item (Join-Path $fleet 'hostsnapshot_hardened.json') (Join-Path $scanDir 'snapshots\hostsnapshot_SRV-APP-02_20261001080000.json')
 Push-Location $scanDir
 try {
-    $scanAll = (@('2', '', '', '', '', '', '', '', '', 'n', '', '', '', '', '', '', '', '', '', '', '', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
-    $scanOne = (@('2', '2', '', '', '', '', '', '', 'n', '', '', '', '', '', '', '', '', '', '', '', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
+    $scanAll = (@('2', '', '', '', '', '', '', '', '', 'n', '', '', '', '', '', '', '', '', '', '', '', '', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
+    $scanOne = (@('2', '2', '', '', '', '', '', '', 'n', '', '', '', '', '', '', '', '', '', '', '', '', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
     # Remediation: never applied in a test. Option 7 with no backup says so; option 6 stops for a
     # standard user, or is declined at "Continue?" when the tests run elevated.
     $rem7 = (@('7', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
@@ -936,7 +940,7 @@ $writeState = { param($o) [System.IO.File]::WriteAllText($resState, ($o | Conver
 & $writeState ([ordered]@{ version = 1; flow = 'analyze'; stage = 'running'; savedUtc = '2026-10-15 10:00 UTC'; answers = [ordered]@{ 'Snapshot' = $fleet; 'Report HTML path' = $resHtml; 'One report per host? (Y/n)' = 'n'; 'Include the DISA STIG rules? (Y/n)' = ''; 'Show the CIS-based findings in the report? (Y/n)' = ''; 'Show the DISA STIG findings in the report? (Y/n)' = ''; 'CISA KEV catalog: [N]one, [O]nline download, or a [F]ile you already have (N/o/f)' = 'N' } })
 Push-Location $resDir; $env:HOSTBADGER_NO_RESUME = ''
 try {
-    $resOut = (@('y', '', '', '', '', '', '', '', '', '', '', '', '', '', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
+    $resOut = (@('y', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
     $resOk = (Test-Path $resHtml) -and -not (Test-Path $resState)
     & $writeState ([ordered]@{ version = 1; flow = 'remediate'; stage = 'applying'; savedUtc = '2026-10-15 10:00 UTC'; answers = [ordered]@{ run = 'C:\x\output\remediation\20261015_100000' } })
     $resRem = (@('q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
@@ -1315,6 +1319,27 @@ $cveNoKev = $cveBack.Clone(); $cveNoKev.Products = @{ '7-Zip' = @($cveBack.Produ
 $cfgCve['Cve'] = $cveNoKev
 Assert-Equal @((Invoke-HostChecks -Snapshot $cveHost -Config $cfgCve).Findings | Where-Object { $_.Type -eq 'software_cve' } | ForEach-Object { $_.Severity }) 'Medium' 'software CVE: CVSS 7.8 without KEV or EPSS is Medium'
 Assert-Equal @($weak.NotEvaluated | Where-Object { $_.Type -eq 'software_cve' }).Count 0 'software CVE: without NVD data the check is off, not "not evaluated"'
+# Public-exploit references (-ExploitFile / -ExploitsOnline): a prioritization signal on software_cve, not a
+# check of its own. Only module names and Exploit-DB ids are kept; a ready Metasploit exploit module raises
+# the CVE finding to High, an auxiliary-only module is named but does not.
+$msfJson = [ordered]@{
+    'exploit/windows/test/one'   = [ordered]@{ fullname = 'exploit/windows/test/one'; type = 'exploit'; references = @('CVE-2024-11477', 'URL-https://example', 'OSVDB-1') }
+    'auxiliary/scanner/test/two' = [ordered]@{ fullname = 'auxiliary/scanner/test/two'; type = 'auxiliary'; references = @('CVE-2030-0001') }
+} | ConvertTo-Json -Depth 6
+$msfParsed = ConvertFrom-MsfMetadata $msfJson
+Assert-Equal ((@($msfParsed | ForEach-Object { "$($_.Cve)|$($_.Module)|$($_.Type)" }) | Sort-Object) -join ';') 'CVE-2024-11477|exploit/windows/test/one|exploit;CVE-2030-0001|auxiliary/scanner/test/two|auxiliary' 'exploits: Metasploit metadata to CVE references (URL and OSVDB references dropped)'
+$edbCsv = "id,file,description,date_published,author,type,platform,port,date_added,date_updated,verified,codes,tags,aliases,screenshot_url,application_url,source_url`n50001,exploits/windows/x.rb,""x"",2024-01-01,A,remote,windows,,2024-01-01,2024-01-01,1,CVE-2024-11477;OSVDB-1,,,,,`n50002,exploits/windows/y.txt,""y"",2024-01-01,B,local,windows,,2024-01-01,2024-01-01,0,CVE-1999-0001,,,,,`n"
+$edbParsed = ConvertFrom-ExploitDbCsv $edbCsv
+Assert-Equal ((@($edbParsed | ForEach-Object { "$($_.Cve)|$($_.Id)|$($_.Verified)" }) | Sort-Object) -join ';') 'CVE-1999-0001|50002|False;CVE-2024-11477|50001|True' 'exploits: Exploit-DB CSV to CVE references (the codes column)'
+$exBack = ConvertFrom-ExploitCatalog (ConvertTo-ExploitCatalogJson (ConvertTo-ExploitIndex $msfParsed $edbParsed) 'test')
+Assert-True (@($exBack['CVE-2024-11477'].msf).Count -eq 1 -and "$($exBack['CVE-2024-11477'].msf[0].module)" -eq 'exploit/windows/test/one' -and (@($exBack['CVE-2024-11477'].edb) -contains '50001') -and @($exBack['CVE-2030-0001'].edb).Count -eq 0) 'exploits: the CVE index reads back from the kept copy (a CVE with only a module keeps an empty Exploit-DB list)'
+$cfgEx = $config.Clone(); $cfgEx['Cve'] = $cveNoKev; $cfgEx['Exploits'] = $exBack
+$exRes = @((Invoke-HostChecks -Snapshot $cveHost -Config $cfgEx).Findings | Where-Object { $_.Type -eq 'software_cve' })
+Assert-True ($exRes.Count -eq 1 -and $exRes[0].Severity -eq 'High' -and $exRes[0].Detail -match 'public exploit published \(Metasploit module exploit/windows/test/one; Exploit-DB EDB-50001\)') 'exploits: software_cve names the references and a ready Metasploit exploit module raises Medium to High'
+$cfgEx['Exploits'] = ConvertFrom-ExploitCatalog (ConvertTo-ExploitCatalogJson (ConvertTo-ExploitIndex @([pscustomobject]@{ Cve = 'CVE-2024-11477'; Module = 'auxiliary/scanner/test/two'; Type = 'auxiliary' }) @()) 'test')
+$exRes2 = @((Invoke-HostChecks -Snapshot $cveHost -Config $cfgEx).Findings | Where-Object { $_.Type -eq 'software_cve' })
+Assert-Equal ("$($exRes2[0].Severity)|" + [bool]($exRes2[0].Detail -match 'public exploit published \(Metasploit module auxiliary/scanner/test/two\)')) 'Medium|True' 'exploits: an auxiliary-only module is named but does not raise the severity'
+Assert-Equal @($weak.NotEvaluated | Where-Object { $_.Type -eq 'software_cve' }).Count 0 'exploits: without the catalog software_cve is unchanged (exploits only enrich it)'
 # Pending updates (collected with -CheckUpdates)
 Assert-True (Has $weak 'updates_pending' 'update: KB5099999' 'High') 'updates: a Critical missing update is High'
 Assert-True (Has $weak 'updates_pending' 'update: KB5088888' 'Medium') 'updates: an Important missing update is Medium'
@@ -1429,6 +1454,32 @@ Assert-True ($cvRows.Count -eq 1 -and $cvRows[0].Host -eq 'WKS-ACCT-017' -and $c
 $cvFileOut = Join-Path $work 'cvefile'; New-Item -ItemType Directory -Path $cvFileOut -Force | Out-Null
 & (Join-Path $root 'HostBadger.ps1') -Snapshot $fleet -OutHtml (Join-Path $cvFileOut 'r.html') -CveFile (Join-Path $cvDl 'r_cve.json') *>&1 | Out-Null
 Assert-Equal (@(Import-Csv (Join-Path $cvFileOut 'r.csv') | Where-Object { $_.Type -eq 'software_cve' }) | ForEach-Object { "$($_.Host)|$($_.Object)|$($_.Severity)|$($_.Detail)" }) (@($cvRows) | ForEach-Object { "$($_.Host)|$($_.Object)|$($_.Severity)|$($_.Detail)" }) 'NVD file: -CveFile on the kept copy gives the same finding, no network'
+# Public-exploit download: one GET to each source (Metasploit metadata, the Exploit-DB index), the CVE
+# references kept next to the report, and software_cve enriched with them (reusing the kept CVE copy above).
+foreach ($try in 1..8) { $exPort = Get-Random -Minimum 20000 -Maximum 60000; $exListener = New-Object System.Net.HttpListener; $exListener.Prefixes.Add("http://127.0.0.1:$exPort/"); try { $exListener.Start(); break } catch { $exListener.Close() } }
+$exMsfBody = [ordered]@{ 'exploit/windows/fileformat/sevenzip' = [ordered]@{ fullname = 'exploit/windows/fileformat/sevenzip'; type = 'exploit'; references = @('CVE-2024-11477') } } | ConvertTo-Json -Depth 6
+$exEdbBody = "id,file,description,date_published,author,type,platform,port,date_added,date_updated,verified,codes,tags,aliases,screenshot_url,application_url,source_url`n60001,exploits/windows/z.rb,""z"",2024-02-01,A,remote,windows,,2024-02-01,2024-02-01,1,CVE-2024-11477,,,,,`n"
+$exPs = [powershell]::Create(); $exCap = [hashtable]::Synchronized(@{ Paths = (New-Object System.Collections.ArrayList) })
+foreach ($kv in @(@('l', $exListener), @('cap', $exCap), @('msf', $exMsfBody), @('edb', $exEdbBody))) { $exPs.Runspace.SessionStateProxy.SetVariable($kv[0], $kv[1]) }
+[void]$exPs.AddScript({
+        while ($l.IsListening) {
+            try { $ctx = $l.GetContext() } catch { break }
+            [void]$cap.Paths.Add($ctx.Request.Url.AbsolutePath)
+            $body = if ($ctx.Request.Url.AbsolutePath -like '*modules_metadata*') { $msf } else { $edb }
+            $buf = [System.Text.Encoding]::UTF8.GetBytes($body); $ctx.Response.OutputStream.Write($buf, 0, $buf.Length); $ctx.Response.Close()
+        }
+    })
+$exAsync = $exPs.BeginInvoke()
+$env:HOSTBADGER_MSF_URL = "http://127.0.0.1:$exPort/rapid7/metasploit-framework/master/db/modules_metadata_base.json"; $env:HOSTBADGER_EXPLOITDB_URL = "http://127.0.0.1:$exPort/exploit-database/exploitdb/-/raw/main/files_exploits.csv"
+$exDl = Join-Path $work 'exploitdl'; New-Item -ItemType Directory -Path $exDl -Force | Out-Null
+try { & (Join-Path $root 'HostBadger.ps1') -Snapshot $fleet -OutHtml (Join-Path $exDl 'r.html') -CveFile (Join-Path $cvDl 'r_cve.json') -ExploitsOnline *>&1 | Out-Null }
+finally { Remove-Item Env:\HOSTBADGER_MSF_URL, Env:\HOSTBADGER_EXPLOITDB_URL -ErrorAction SilentlyContinue; try { $exListener.Stop() } catch { }; $exPs.Dispose() }
+$exDlRows = @(Import-Csv (Join-Path $exDl 'r.csv') | Where-Object { $_.Type -eq 'software_cve' })
+Assert-True ((Test-Path (Join-Path $exDl 'r_exploits.json')) -and @($exCap.Paths | Where-Object { $_ -like '*modules_metadata*' }).Count -eq 1 -and @($exCap.Paths | Where-Object { $_ -like '*files_exploits*' }).Count -eq 1) 'exploits online: one GET of the Metasploit metadata and one of the Exploit-DB index, kept next to the report'
+Assert-True ($exDlRows.Count -eq 1 -and $exDlRows[0].Object -eq 'software: 7-Zip' -and $exDlRows[0].Detail -match 'public exploit published \(Metasploit module exploit/windows/fileformat/sevenzip; Exploit-DB EDB-60001\)') 'exploits online: the CVE finding names the Metasploit module and the Exploit-DB entry'
+$exFileOut = Join-Path $work 'exploitfile'; New-Item -ItemType Directory -Path $exFileOut -Force | Out-Null
+& (Join-Path $root 'HostBadger.ps1') -Snapshot $fleet -OutHtml (Join-Path $exFileOut 'r.html') -CveFile (Join-Path $cvDl 'r_cve.json') -ExploitFile (Join-Path $exDl 'r_exploits.json') *>&1 | Out-Null
+Assert-True (@(Import-Csv (Join-Path $exFileOut 'r.csv') | Where-Object { $_.Type -eq 'software_cve' })[0].Detail -match 'public exploit published \(Metasploit module exploit/windows/fileformat/sevenzip; Exploit-DB EDB-60001\)') 'exploits file: -ExploitFile on the kept copy gives the same enrichment, no network'
 
 # Vulnerable drivers (LOLDrivers, by SHA-256): a malicious driver is Critical, a loaded vulnerable one
 # High; the blocklist off is Medium; the hardened host has none. The shipped catalog is used unless
@@ -1498,7 +1549,7 @@ Assert-Equal @(Import-Csv (Join-Path $dfOut 'raw.csv') | Where-Object { $_.Type 
 $keptDir = Join-Path $work 'kept'; New-Item -ItemType Directory -Path (Join-Path $keptDir 'output') -Force | Out-Null
 Copy-Item (Join-Path $lolDl 'r_drivers.json') (Join-Path $keptDir 'output\old_drivers.json')
 Push-Location $keptDir
-try { $keptOut = (@('2', $fleet, (Join-Path $keptDir 'k.html'), 'n', '', '', '','', '', '', '', '', '', '', '', '', '', '', '', '', '', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String }
+try { $keptOut = (@('2', $fleet, (Join-Path $keptDir 'k.html'), 'n', '', '', '','', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String }
 finally { Pop-Location }
 $keptRows = @(Import-Csv (Join-Path $keptDir 'k.csv') -ErrorAction SilentlyContinue | Where-Object { $_.Type -eq 'vulnerable_driver_present' })
 Assert-True ($keptOut -match 'Kept from an earlier run: .*old_drivers\.json' -and $keptOut -match 'LOLDrivers catalog\s+file .*old_drivers\.json' -and $keptOut -match 'driver files from .*old_drivers\.json' -and $keptRows.Count -eq 1 -and $keptRows[0].Severity -eq 'Critical') 'launcher: a catalog kept by an earlier run is offered, Enter uses it (no download)'
@@ -1507,7 +1558,7 @@ Assert-True ($keptOut -match 'Kept from an earlier run: .*old_drivers\.json' -an
 (Get-Item -LiteralPath (Join-Path $keptDir 'output\old_drivers.json')).LastWriteTime = (Get-Date).AddDays(-10)
 $env:HOSTBADGER_DRIVERS_URL = 'http://127.0.0.1:9/api/drivers.json'
 Push-Location $keptDir
-try { $staleOut = (@('2', $fleet, (Join-Path $keptDir 's.html'), 'n', '', '', '','', '', '', '', '', '', '', '', '', '', '', '', '', '', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String }
+try { $staleOut = (@('2', $fleet, (Join-Path $keptDir 's.html'), 'n', '', '', '','', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String }
 finally { Pop-Location; Remove-Item Env:\HOSTBADGER_DRIVERS_URL -ErrorAction SilentlyContinue }
 Assert-True ($staleOut -match 'over a week old: Enter downloads a fresh one' -and $staleOut -match 'LOLDrivers catalog\s+download \(www\.loldrivers\.io\)' -and $staleOut -match 'LOLDrivers download failed') 'launcher: a kept catalog over a week old is downloaded again on Enter'
 # Global settings (menu 8): saved through the menu, then an analysis uses them without asking its questions.
@@ -1518,14 +1569,14 @@ $gsDir = Join-Path $work 'global'; New-Item -ItemType Directory -Path (Join-Path
 Copy-Item (Join-Path $lolDl 'r_drivers.json') (Join-Path $gsDir 'output\old_drivers.json')
 Push-Location $gsDir
 try {
-    # 7 = DISA STIG rules off, 12 = LOLDrivers auto (the default), the other catalogs (11, 13-16) kept
-    # whatever their age (auto would download them: there is no kept copy), 17 = JSON Lines on, 27 = AI
+    # 7 = DISA STIG rules off, 12 = LOLDrivers auto (the default), the other catalogs (11, 13-17) kept
+    # whatever their age (auto would download them: there is no kept copy), 18 = JSON Lines on, 28 = AI
     # dry run, Enter saves.
-    $gsMenu = (@('8', '7', '11', 'k', '12', 'a', '13', 'k', '14', 'k', '15', 'k', '16', 'k', '17', '27', 'd', '', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
+    $gsMenu = (@('8', '7', '11', 'k', '12', 'a', '13', 'k', '14', 'k', '15', 'k', '16', 'k', '17', 'k', '18', '28', 'd', '', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
     $gsSaved = $null; try { $gsSaved = [System.IO.File]::ReadAllText((Join-Path $gsDir 'output\hostbadger-settings.json')) | ConvertFrom-Json } catch { }
     # Snapshot, Enter = use the global settings, Enter = no comparison, Enter = run.
     $gsRun = (@('2', $fleet, '', '', '', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
-    $gsAsk = (@('2', $fleet, 'n', (Join-Path $gsDir 'n.html'), 'n', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
+    $gsAsk = (@('2', $fleet, 'n', (Join-Path $gsDir 'n.html'), 'n', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', 'n', 'q') -join "`n") | & $psExe -NoProfile -ExecutionPolicy Bypass -File $launcher 2>&1 | Out-String
 }
 finally { Pop-Location }
 $gsHtml = @(Get-ChildItem (Join-Path $gsDir 'output') -Filter 'hostbadger_*.html' -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^hostbadger_\d{8}_\d{6}\.html$' })
@@ -1643,7 +1694,7 @@ Assert-True ((Test-Path -LiteralPath $gitAttr) -and ([System.IO.File]::ReadAllTe
 # menu with the same parameters, and "Check for updates" outside a git clone reads the version on the
 # main branch with one GET (test hook HOSTBADGER_UPDATE_URL).
 $guiOut = (& (Join-Path $root 'Start-HostBadgerGui.ps1') -NoShow *>&1 | ForEach-Object { "$_" }) -join "`n"
-Assert-True ($guiOut -match 'GUI ready: \d+ controls, 6 catalogs, version \d+\.\d+; settings: \d+ controls, 6 catalogs, 5 fix levels') "window: builds without errors ($($guiOut -replace '\s+', ' '))"
+Assert-True ($guiOut -match 'GUI ready: \d+ controls, 7 catalogs, version \d+\.\d+; settings: \d+ controls, 7 catalogs, 5 fix levels') "window: builds without errors ($($guiOut -replace '\s+', ' '))"
 Assert-True ($guiOut -match 'Fix button: nothing chosen False, no level False, no level with debloat True, a level True') "window: Fix this machine only when there is something to change ($($guiOut -replace '\s+', ' '))"
 # The update check at every start: off without the setting, on with it, and never with -NoShow (no network here).
 $auDir = Join-Path $work 'autoupdate'

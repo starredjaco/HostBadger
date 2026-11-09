@@ -290,6 +290,8 @@ $script:CatalogDefs = [ordered]@{
         Prompt = 'Download program versions from community.chocolatey.org? (y/N)' }
     Cve     = @{ Label = 'CVEs and EPSS'; Suffix = 'cve'; Online = 'CveOnline'; File = 'CveFile'; Site = 'services.nvd.nist.gov, epss.empiricalsecurity.com'; Off = 'no'; OffPrompt = 'skip it'
         Prompt = 'Download CVEs from NVD and EPSS scores from FIRST? (y/N)' }
+    Exploits = @{ Label = 'Public exploits'; Suffix = 'exploits'; Online = 'ExploitsOnline'; File = 'ExploitFile'; Site = 'raw.githubusercontent.com, gitlab.com'; Off = 'no'; OffPrompt = 'skip it'
+        Prompt = 'Download public-exploit references from Metasploit and Exploit-DB? (y/N)' }
     Ext     = @{ Label = 'Malicious browser extensions'; Suffix = 'extensions'; Online = 'ExtensionsOnline'; File = 'ExtensionsFile'; Site = 'raw.githubusercontent.com'; Off = 'the copy HostBadger ships'; OffPrompt = 'the copy HostBadger ships'
         Prompt = 'Download the current list of browser extensions removed from the stores (malext.io)? (y/N)' }
 }
@@ -378,7 +380,7 @@ function New-GlobalSettings {
         version = 2; savedUtc = ''
         SnapshotDir = ''; SkipAcl = $false; CheckUpdates = $false; Encrypt = 'ask'; Certificate = ''
         ReportDir = 'output'; PerHost = $true; SkipStig = $false; HideCis = $false; HideStig = $false; Nis2Acn = $false
-        Kev = 'auto'; KevFile = ''; Drivers = 'auto'; Eol = 'auto'; Choco = 'auto'; Cve = 'auto'; Ext = 'auto'
+        Kev = 'auto'; KevFile = ''; Drivers = 'auto'; Eol = 'auto'; Choco = 'auto'; Cve = 'auto'; Exploits = 'auto'; Ext = 'auto'
         Jsonl = $false; Remediation = $false; RemediationProfile = ''; RemediationDebloat = $false
         ExceptionsFile = ''; PolicyFile = ''; AllowedAdmins = ''; ExpectedEdr = ''; AllowedRemoteTools = ''; AllowedExtensions = ''
         Ai = 'A'; AiIncludeStig = $false; Model = ''; AiMaxAttempts = ''
@@ -773,6 +775,8 @@ function Get-AnalysisParams {
         Set-CatalogChoice -Ap $ap -Name 'Choco'
         Write-Host "`nKnown vulnerabilities: the installed versions of Python, Node.js, .NET, Notepad++, PowerShell 7, VirtualBox, Wireshark, 7-Zip, VLC, Git, GIMP, WinSCP, PuTTY, FileZilla, KeePass, Audacity, Mullvad VPN and AnyDesk can be checked against their CVEs, with the EPSS probability of exploitation. Downloading connects to services.nvd.nist.gov (the CVEs of each product, never its version: the same list whatever the hosts have; about 2.5 minutes, faster with NVD_API_KEY) and epss.empiricalsecurity.com (one file of about 3 MB). Nothing is sent; a copy is kept next to the report." -ForegroundColor DarkGray
         Set-CatalogChoice -Ap $ap -Name 'Cve'
+        Write-Host "`nPublic exploits: for the CVEs found above, HostBadger can note whether a ready Metasploit module or an Exploit-DB entry exists, to help you patch the exploited ones first (a prioritization signal like KEV and EPSS; only references are kept, never exploit code). Downloading connects to raw.githubusercontent.com (Metasploit module metadata) and gitlab.com (the Exploit-DB index), the whole lists whatever the hosts have; nothing is sent, a copy is kept next to the report. Useful only with the CVE data above." -ForegroundColor DarkGray
+        Set-CatalogChoice -Ap $ap -Name 'Exploits'
         Write-Host "`nBrowser extensions: HostBadger ships a list of about 7,900 extensions removed from the Chrome Web Store and Edge Add-ons (malware, spyware, adware) or documented as malicious. A fresh copy of the store list comes from malicious_extension_sentry (malext.io, updated daily): one HTTPS GET of about 2 MB to raw.githubusercontent.com, nothing is sent; a copy is kept next to the report." -ForegroundColor DarkGray
         Set-CatalogChoice -Ap $ap -Name 'Ext'
         if (Test-Yes "Also write JSON Lines for a SIEM? (y/N)") { $ap['OutJsonl'] = Read-Path "JSON Lines path" ($ap['OutHtml'] -replace '\.html?$', '.jsonl') }

@@ -6,6 +6,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are numbered major.minor: a new minor for new features and fixes, a
 new major if the snapshot or the JSON Lines format ever breaks.
 
+## [2.5] - 2026-11-09
+### Added
+- `-ExploitsOnline` / `-ExploitFile`: for the CVEs `software_cve` already finds
+  by installed version, note whether a ready Metasploit module or an Exploit-DB
+  entry exists, so the exploited ones are patched first. A prioritization signal
+  like KEV and EPSS, kept as references only (the module name and the Exploit-DB
+  id, never exploit code); a ready Metasploit exploit module raises the finding
+  to High. The two reference lists are downloaded whole (the Metasploit module
+  metadata from raw.githubusercontent.com, BSD-3, and the Exploit-DB index from
+  gitlab.com, GPLv2 data), the same whatever the hosts have, so the requests
+  reveal nothing; the reduced copy is kept next to the report
+  (`<report>_exploits.json`). Offered in the guided menu, the window and the
+  global settings.
+- Every finding whose check has a well-known offensive-tool association now
+  carries the **tools attackers use** against it (Responder, Mimikatz, Impacket,
+  NetExec, PowerUp...), shown under the check in the report, in the `Tools` CSV
+  column and the `tools` JSON Lines field: threat-informed context for
+  defenders to expect and detect, references only.
+
 ## [2.4] - 2026-11-06
 ### Added
 - Window: after **Analyze** a question offers the AI summary (send to Gemini,

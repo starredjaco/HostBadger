@@ -101,6 +101,19 @@
     report (<report>_cve.json).
 .PARAMETER CveFile
     The <report>_cve.json that -CveOnline keeps. No network.
+.PARAMETER ExploitsOnline
+    Download the public-exploit references and note, next to each CVE that
+    software_cve already found by version, whether a Metasploit module or an
+    Exploit-DB entry exists. A prioritization signal like KEV and EPSS: only the
+    module name and the Exploit-DB id are kept, never exploit code. Two HTTPS
+    GETs, nothing is sent: the Metasploit module metadata from
+    raw.githubusercontent.com (rapid7/metasploit-framework, BSD-3) and the
+    Exploit-DB index from gitlab.com (exploit-database, GPLv2 data), the whole
+    lists whatever the hosts have. A ready Metasploit exploit module raises the
+    CVE finding to High. The reduced copy is kept next to the report
+    (<report>_exploits.json). Has an effect only together with the CVE data.
+.PARAMETER ExploitFile
+    The <report>_exploits.json that -ExploitsOnline keeps. No network.
 .PARAMETER SoftwareGraceDays
     Days a program may take to install a new release before software_outdated
     flags it (default 30).
@@ -309,6 +322,8 @@ param(
     [string]$ChocoFile = '',
     [switch]$CveOnline,
     [string]$CveFile = '',
+    [switch]$ExploitsOnline,
+    [string]$ExploitFile = '',
     [int]$SoftwareGraceDays = 30,
     [System.Security.SecureString]$SnapshotPassword,
     [string]$SnapshotPfx = '',
@@ -334,7 +349,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:HostBadgerVersion = '2.4'
+$script:HostBadgerVersion = '2.5'
 . (Join-Path $PSScriptRoot 'lib\Common.ps1')
 . (Join-Path $PSScriptRoot 'lib\Checks.ps1')
 . (Join-Path $PSScriptRoot 'lib\AI.ps1')
@@ -344,7 +359,7 @@ $script:HostBadgerVersion = '2.4'
 Write-Host @'
      _.--""--._
    .'  |    |  '.
-  /    |    |    \      HostBadger v2.4
+  /    |    |    \      HostBadger v2.5
  |  (o)|    |(o)  |     Windows host hardening
  |     |    |     |     read-only snapshots, offline analysis
   \    '.__.'    /
@@ -719,6 +734,33 @@ try {
             Write-Host "NVD: $($cveCat.Products.Count) of $(@($script:CveCpeMap.Keys).Count) products, EPSS scores of $($cveCat.EpssDate), kept at $cveCopy" -ForegroundColor DarkGray
         }
         else { Write-Host 'NVD: nothing came back, software_cve is not judged.' -ForegroundColor Yellow }
+    }
+
+    # Public-exploit references (Metasploit modules and Exploit-DB): the copy kept by an earlier run, or
+    # a download. It only enriches software_cve, so it is read but does nothing without the CVE data.
+    if ($ExploitFile) {
+        if (Test-Path -LiteralPath $ExploitFile) {
+            try { $config['Exploits'] = ConvertFrom-ExploitCatalog ([System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $ExploitFile).Path)); Write-Host "Public exploits: $($config['Exploits'].Count) CVEs with a reference from $ExploitFile" -ForegroundColor DarkGray }
+            catch { Write-Host "Exploit file not readable: $($_.Exception.Message)" -ForegroundColor Yellow; $config.Remove('Exploits') }
+        }
+        else { Write-Host "Exploit file not found: $ExploitFile" -ForegroundColor Yellow }
+    }
+    elseif ($ExploitsOnline) {
+        $exCat = Get-ExploitCatalogOnline
+        if ($exCat.Msf -or $exCat.Edb) {
+            try {
+                $msf = if ($exCat.Msf) { @(ConvertFrom-MsfMetadata $exCat.Msf) } else { @() }
+                $edb = if ($exCat.Edb) { @(ConvertFrom-ExploitDbCsv $exCat.Edb) } else { @() }
+                $config['Exploits'] = ConvertTo-ExploitIndex $msf $edb
+                if ($config['Exploits'].Count -eq 0) { throw 'no CVE reference in the downloads' }
+                $exCopy = ([System.IO.Path]::GetFullPath($OutHtml) -replace '\.html?$', '') + '_exploits.json'
+                $exSource = "Metasploit modules ($($script:MsfMetadataUrl), BSD-3) and Exploit-DB ($($script:ExploitDbUrl), GPLv2 data); downloaded $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm')) UTC"
+                [System.IO.File]::WriteAllText($exCopy, (ConvertTo-ExploitCatalogJson $config['Exploits'] $exSource), (New-Object System.Text.UTF8Encoding($false)))
+                Write-Host "Public exploits: $($config['Exploits'].Count) CVEs with a Metasploit or Exploit-DB reference, kept at $exCopy" -ForegroundColor DarkGray
+            }
+            catch { Write-Host "Public-exploit references not readable: $($_.Exception.Message)" -ForegroundColor Yellow; $config.Remove('Exploits') }
+        }
+        else { Write-Host 'Public exploits: nothing came back, CVE findings are not enriched.' -ForegroundColor Yellow }
     }
 
     $files = @(Get-SnapshotFiles $Snapshot)

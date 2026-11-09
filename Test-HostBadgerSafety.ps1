@@ -31,9 +31,10 @@
         CISA KEV catalog address (www.cisa.gov, -KevOnline), the LOLDrivers
         catalog address (www.loldrivers.io, -DriversOnline), the software
         lifecycle address (endoflife.date, -EolOnline), the Chocolatey
-        package feed (community.chocolatey.org, -ChocoOnline) and the NVD CVE
+        package feed (community.chocolatey.org, -ChocoOnline), the NVD CVE
         API and FIRST EPSS file (services.nvd.nist.gov,
-        epss.empiricalsecurity.com, -CveOnline);
+        epss.empiricalsecurity.com, -CveOnline) and the public-exploit
+        references (raw.githubusercontent.com, gitlab.com, -ExploitsOnline);
       - HTTP or socket code outside lib\AI.ps1. The collector and the checks
         never touch the network. Gemini is called only after -SendToAI, from
         HostBadger.ps1, once names have been replaced by tokens;
@@ -117,10 +118,11 @@ $allowedHosts = @('attack.mitre.org', 'schemas.microsoft.com')
 # lib\AI.ps1 is the only code that may reach the network, and only these addresses: Gemini (-SendToAI),
 # the CISA KEV catalog (-KevOnline), the LOLDrivers catalog (-DriversOnline) and the endoflife.date
 # software lifecycle data (-EolOnline), the Chocolatey package feed (-ChocoOnline) and the NVD CVE API and
-# FIRST EPSS file (-CveOnline), and the list of browser extensions removed from the stores
-# (-ExtensionsOnline, raw.githubusercontent.com).
+# FIRST EPSS file (-CveOnline), the list of browser extensions removed from the stores
+# (-ExtensionsOnline, raw.githubusercontent.com) and the public-exploit references (Metasploit module
+# metadata at raw.githubusercontent.com and the Exploit-DB index at gitlab.com, -ExploitsOnline).
 $aiFile = 'lib/AI.ps1'
-$aiHosts = @('generativelanguage.googleapis.com', 'www.cisa.gov', 'www.loldrivers.io', 'endoflife.date', 'community.chocolatey.org', 'services.nvd.nist.gov', 'epss.empiricalsecurity.com', 'raw.githubusercontent.com')
+$aiHosts = @('generativelanguage.googleapis.com', 'www.cisa.gov', 'www.loldrivers.io', 'endoflife.date', 'community.chocolatey.org', 'services.nvd.nist.gov', 'epss.empiricalsecurity.com', 'raw.githubusercontent.com', 'gitlab.com')
 $networkText = '(?i)System\.Net\.Http|HttpClient|PostAsync|GetAsync|TcpClient|UdpClient|System\.Net\.Sockets|\[Net\.WebRequest\]|\[System\.Net\.WebRequest\]'
 # Compiled C# (Add-Type -MemberDefinition) is banned everywhere except this one reviewed, read-only
 # P/Invoke in the collector: GetNamedPipeServerProcessId (kernel32) names the process that owns a

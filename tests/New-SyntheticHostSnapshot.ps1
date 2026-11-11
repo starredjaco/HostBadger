@@ -302,7 +302,7 @@ $s = [ordered]@{
                     [ordered]@{ id = 'ccccddddeeeeffffgggghhhhiiiijjjj'; name = 'Corp SSO'; version = '5.0.1'; enabled = $true; source = 'policy'; permissions = @('<all_urls>', 'cookies', 'webRequest'); contentScripts = @() }) }) }
     # Windows' own load points, signed by Microsoft; nothing hidden; the logon screen tools are the originals.
     loadPoints           = [ordered]@{
-        networkProviders = @([ordered]@{ name = 'RDPNP'; dll = 'C:\Windows\System32\drprov.dll'; exists = $true; signer = 'Microsoft Windows'; status = 'Valid' }, [ordered]@{ name = 'LanmanWorkstation'; dll = 'C:\Windows\System32\ntlanman.dll'; exists = $true; signer = 'Microsoft Windows'; status = 'Valid' })
+        networkProviders = @([ordered]@{ name = 'RDPNP'; dll = 'C:\Windows\System32\drprov.dll'; exists = $true; signer = 'Microsoft Windows'; status = 'Valid'; logonNotify = $false }, [ordered]@{ name = 'LanmanWorkstation'; dll = 'C:\Windows\System32\ntlanman.dll'; exists = $true; signer = 'Microsoft Windows'; status = 'Valid'; logonNotify = $false })
         credentialProviders = @([ordered]@{ kind = 'provider'; clsid = '{60b78e88-ead8-445c-9cfd-0b87f74ea6cd}'; name = 'PasswordProvider'; dll = 'C:\Windows\system32\credprovs.dll'; exists = $true; signer = 'Microsoft Windows'; status = 'Valid' })
         appCertDlls = @(); sessionManagerExecute = @([ordered]@{ value = 'BootExecute'; command = 'autocheck autochk *' })
         timeProviders = @([ordered]@{ name = 'NtpClient'; dll = 'C:\Windows\system32\w32time.dll'; enabled = 1; exists = $true; signer = 'Microsoft Windows'; status = 'Valid' })
@@ -356,6 +356,9 @@ switch ($Scenario) {
         $s.stig = Get-StigSection (Remove-StigValues $stigMachine 'srv2022ms' 1) $stigUser ([ordered]@{ edge = $true; chrome = $true; firefox = $true; office = $true }) 'srv2022ms'
         # A member server that does not print: Print Spooler disabled (CIS Server 5.2).
         foreach ($sv in @($s.services | Where-Object { $_.name -eq 'Spooler' })) { $sv.startMode = 'Disabled' }
+        # A vendor file-system tool's network provider (WinFsp-style): signed, but it only maps drives
+        # and exports no NPLogonNotify, so it never sees a logon credential and must not be reported.
+        $s.loadPoints.networkProviders = @($s.loadPoints.networkProviders) + @([ordered]@{ name = 'WinFsp.Np'; dll = 'C:\Program Files (x86)\WinFsp\bin\winfsp-x64.dll'; exists = $true; signer = 'NAVIMATICS LLC'; status = 'Valid'; logonNotify = $false })
         # SQL Server 2022 on its latest cumulative update (CU27, 2026-09-15).
         $s.software = @($s.software) + @([ordered]@{ name = 'Microsoft SQL Server 2022 (64-bit)'; version = ''; publisher = 'Microsoft Corporation' })
         $s.sqlServer = @([ordered]@{ name = 'MSSQLSERVER'; id = 'MSSQL16.MSSQLSERVER'; wow64 = $false; edition = 'Standard Edition'; fileVersion = '16.0.4295.3'; patchLevel = '16.0.4295.3'; version = '16.0.1000.6'; sp = 0 })
@@ -592,7 +595,7 @@ switch ($Scenario) {
         # Load points few tools read: a password-capturing network provider, an unsigned AppCertDll, a boot
         # program, an unsigned time provider, a vendor print processor, a .NET profiler, a crash debugger.
         $lp = $s.loadPoints
-        $lp.networkProviders = @($lp.networkProviders) + @([ordered]@{ name = 'LogonNotify'; dll = 'C:\Windows\System32\lognp.dll'; exists = $true; signer = $null; status = 'NotSigned' })
+        $lp.networkProviders = @($lp.networkProviders) + @([ordered]@{ name = 'CredSniff'; dll = 'C:\Windows\System32\lognp.dll'; exists = $true; signer = $null; status = 'NotSigned'; logonNotify = $true })
         $lp.credentialProviders = @($lp.credentialProviders) + @([ordered]@{ kind = 'filter'; clsid = '{0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0}'; name = 'Contoso SSO Filter'; dll = 'C:\Program Files\Contoso SSO\cpfilter.dll'; exists = $true; signer = 'Contoso Ltd.'; status = 'Valid' })
         $lp.appCertDlls = @([ordered]@{ name = 'certhelp'; dll = 'C:\ProgramData\certhelp.dll'; exists = $true; signer = $null; status = 'NotSigned' })
         $lp.sessionManagerExecute = @($lp.sessionManagerExecute) + @([ordered]@{ value = 'BootExecute'; command = 'bootsvc.exe /q' })

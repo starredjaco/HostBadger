@@ -4658,21 +4658,24 @@
         "dll": "C:\\Windows\\System32\\drprov.dll",
         "exists": true,
         "signer": "Microsoft Windows",
-        "status": "Valid"
+        "status": "Valid",
+        "logonNotify": false
       },
       {
         "name": "LanmanWorkstation",
         "dll": "C:\\Windows\\System32\\ntlanman.dll",
         "exists": true,
         "signer": "Microsoft Windows",
-        "status": "Valid"
+        "status": "Valid",
+        "logonNotify": false
       },
       {
-        "name": "LogonNotify",
+        "name": "CredSniff",
         "dll": "C:\\Windows\\System32\\lognp.dll",
         "exists": true,
         "signer": null,
-        "status": "NotSigned"
+        "status": "NotSigned",
+        "logonNotify": true
       }
     ],
     "credentialProviders": [

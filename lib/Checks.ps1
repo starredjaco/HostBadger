@@ -666,7 +666,7 @@ $script:CheckCatalog = [ordered]@{
 
     persistence_credential_capture = @{ Category = 'Persistence'; Severity = 'High'; Mitre = 'T1556.008'; Needs = @('loadPoints'); Roles = $script:AllRoles
         Title = 'Logon component that sees passwords is not Windows'' own'
-        Description = 'A network provider (NetworkProvider\Order) or a credential provider or filter of the logon screen loads a DLL that is not signed by Microsoft. Windows hands every network provider the user name and the password in clear at each interactive logon (the NPPSpy technique, a few lines of code), and a credential provider sees what is typed on the logon screen. High: the DLL is not signed or its signature is not valid. Medium: signed by a vendor (VPN, single sign-on, file system and virtualization tools add one): verify the product. Low: the DLL does not exist.'
+        Description = 'A network provider (NetworkProvider\Order) that registers NPLogonNotify, or a credential provider or filter of the logon screen, loads a DLL that is not signed by Microsoft. A network provider that registers NPLogonNotify is handed the user name and the password in clear at each interactive logon (the NPPSpy technique, a few lines of code); one that only maps network drives exports no NPLogonNotify and is not reported. A credential provider sees what is typed on the logon screen. High: the DLL is not signed or its signature is not valid. Medium: signed by a vendor (VPN, single sign-on, file system and virtualization tools add one): verify the product. Low: the DLL does not exist.'
         Remediation = 'Find the product that added the entry. If there is none, remove the provider from NetworkProvider\Order (ProviderOrder) or its CLSID from Authentication\Credential Providers, delete the DLL, reset the passwords of the users who logged on and investigate the host as compromised. Keep a vendor component current or accept it with an exception.' }
     persistence_dll_load_point = @{ Category = 'Persistence'; Severity = 'High'; Mitre = 'T1546'; Needs = @('loadPoints'); Roles = $script:AllRoles
         Title = 'Code started by a lesser-known Windows load point'
@@ -4698,7 +4698,16 @@ function Invoke-LoadPointChecks {
         if (& $can 'persistence_credential_capture') {
             foreach ($n in @($lp.networkProviders | Where-Object { $_ -and "$($_.dll)".Trim() })) {
                 if (Test-StockSigner $n) { continue }
-                Add-Finding -Type 'persistence_credential_capture' -Object "network provider: $($n.name)" -Severity (Get-DllSeverity $n) -Detail "ProviderOrder lists $($n.name), which loads $($n.dll) ($(Get-SignerText $n)): Windows hands it the user name and the password at every interactive logon."
+                # A provider is handed the password at logon only if it registers NPLogonNotify. One that
+                # exports none (logonNotify = $false) only maps network drives and never sees a credential.
+                $notify = $n.logonNotify
+                if ($notify -eq $false) { continue }
+                $detail = if ($notify) {
+                    "ProviderOrder lists $($n.name), which loads $($n.dll) ($(Get-SignerText $n)) and registers NPLogonNotify: Windows hands it the user name and the password in clear at every interactive logon (the NPPSpy technique)."
+                } else {
+                    "ProviderOrder lists $($n.name), which loads $($n.dll) ($(Get-SignerText $n)); its export table could not be read, so whether it registers NPLogonNotify (and is handed the password at every interactive logon) is unconfirmed."
+                }
+                Add-Finding -Type 'persistence_credential_capture' -Object "network provider: $($n.name)" -Severity (Get-DllSeverity $n) -Detail $detail
             }
             foreach ($c in @($lp.credentialProviders | Where-Object { $_ -and "$($_.dll)".Trim() })) {
                 if (Test-StockSigner $c) { continue }

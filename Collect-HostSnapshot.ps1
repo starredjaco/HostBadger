@@ -86,7 +86,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:CollectorVersion = '2.5'
+$script:CollectorVersion = '2.6'
 $script:SchemaVersion = 1
 $script:Errors = New-Object System.Collections.Generic.List[object]
 $script:Sections = New-Object System.Collections.Generic.List[string]
@@ -1250,6 +1250,56 @@ function Resolve-SystemDll {
     if ($n -notmatch '[\\/]') { if ($n -notmatch '\.dll$') { $n += '.dll' }; return (Join-Path "$env:SystemRoot\System32" $n) }
     return $n
 }
+function Test-DllExport {
+    # Does the PE at $Path export a function named $Name? Read-only: the file bytes are parsed,
+    # the DLL is never loaded. $true / $false when the export table was read, $null when the file
+    # is missing or the header cannot be parsed. Used to tell a network provider that registers
+    # NPLogonNotify (it is handed the password at every interactive logon, the NPPSpy technique)
+    # from one that only maps network drives and never sees a logon credential.
+    param([string]$Path, [string]$Name)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    try {
+        $b = [System.IO.File]::ReadAllBytes($Path)
+        if ($b.Length -lt 64 -or $b[0] -ne 0x4D -or $b[1] -ne 0x5A) { return $null }      # MZ
+        $pe = [BitConverter]::ToInt32($b, 0x3C)
+        if ($pe -lt 0 -or ($pe + 24) -ge $b.Length -or $b[$pe] -ne 0x50 -or $b[$pe + 1] -ne 0x45) { return $null }  # PE\0\0
+        $opt = $pe + 24
+        $magic = [BitConverter]::ToUInt16($b, $opt)
+        $ddOff = if ($magic -eq 0x20B) { $opt + 0x70 } else { $opt + 0x60 }               # data directory: PE32+ vs PE32
+        if (($ddOff + 8) -ge $b.Length) { return $null }
+        $expRva = [BitConverter]::ToUInt32($b, $ddOff)
+        if ($expRva -eq 0) { return $false }                                              # no export directory at all
+        $numSec = [BitConverter]::ToUInt16($b, $pe + 6)
+        $secOff = $opt + [BitConverter]::ToUInt16($b, $pe + 20)
+        $toOff = {
+            param($rva)
+            for ($i = 0; $i -lt $numSec; $i++) {
+                $s = $secOff + $i * 40
+                if (($s + 24) -ge $b.Length) { break }
+                $va = [BitConverter]::ToUInt32($b, $s + 12); $vsz = [BitConverter]::ToUInt32($b, $s + 8)
+                $raw = [BitConverter]::ToUInt32($b, $s + 20)
+                if ($rva -ge $va -and $rva -lt ($va + $vsz)) { return ($raw + ($rva - $va)) }
+            }
+            return -1
+        }
+        $expOff = & $toOff $expRva
+        if ($expOff -lt 0 -or ($expOff + 36) -ge $b.Length) { return $null }
+        $nNames = [BitConverter]::ToUInt32($b, $expOff + 24)
+        $namesOff = & $toOff ([BitConverter]::ToUInt32($b, $expOff + 32))
+        if ($namesOff -lt 0) { return $null }
+        for ($i = 0; $i -lt $nNames; $i++) {
+            $p = $namesOff + $i * 4
+            if (($p + 4) -ge $b.Length) { break }
+            $nOff = & $toOff ([BitConverter]::ToUInt32($b, $p))
+            if ($nOff -lt 0) { continue }
+            $end = $nOff
+            while ($end -lt $b.Length -and $b[$end] -ne 0) { $end++ }
+            if ([System.Text.Encoding]::ASCII.GetString($b, $nOff, $end - $nOff) -ceq $Name) { return $true }
+        }
+        return $false
+    }
+    catch { return $null }
+}
 $persistence = Invoke-Section 'persistence' {
     $p = [ordered]@{ wmiConsumers = @(); ifeoDebuggers = @(); silentProcessExit = @(); appInit = @(); winlogon = $null; lsa = $null; printMonitors = @(); netshHelpers = @() }
     # WMI event subscriptions: the consumers that run something (a command line or a script) and whether a
@@ -1355,12 +1405,15 @@ $loadPoints = Invoke-Section 'loadPoints' {
         officeTestMachine = @(); officeProfiles = @(); userHivesRead = 0; ssh = $null; bitsJobs = @(); bitsJobCount = $null; accessibility = @(); missingTargets = @()
     }
     $ccs = 'HKLM:\SYSTEM\CurrentControlSet'
-    # Network providers (NPPSpy): every DLL in the provider order gets the user name and the password
-    # in clear at each interactive logon.
+    # Network providers: a DLL in the provider order gets the user name and the password in clear at
+    # each interactive logon ONLY if it registers NPLogonNotify (the NPPSpy technique). One that only
+    # maps network drives (webclient, p9np, a file-system tool) exports no NPLogonNotify and never sees
+    # a logon credential; logonNotify records which it is so the analyzer does not accuse the latter.
     foreach ($n in @("$(Get-RegValue "$ccs\Control\NetworkProvider\Order" 'ProviderOrder')".Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
         $dll = "$(Get-RegValue "$ccs\Services\$n\NetworkProvider" 'ProviderPath')"
-        $si = Get-SignerInfo (Resolve-SystemDll $dll)
-        $lp.networkProviders += [ordered]@{ name = $n; dll = $dll; exists = $si.exists; signer = $si.signer; status = $si.status }
+        $resolved = Resolve-SystemDll $dll
+        $si = Get-SignerInfo $resolved
+        $lp.networkProviders += [ordered]@{ name = $n; dll = $dll; exists = $si.exists; signer = $si.signer; status = $si.status; logonNotify = (Test-DllExport $resolved 'NPLogonNotify') }
     }
     # Credential providers and their filters: the DLLs of the logon screen, which see what is typed there.
     $auth = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication'

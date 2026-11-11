@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are numbered major.minor: a new minor for new features and fixes, a
 new major if the snapshot or the JSON Lines format ever breaks.
 
+## [2.6] - 2026-11-11
+### Fixed
+- `persistence_credential_capture` no longer accuses every third-party network
+  provider of stealing logon credentials. A provider is handed the user name and
+  password at interactive logon only if it registers `NPLogonNotify` (the NPPSpy
+  technique); one that merely maps network drives (WinFsp, `webclient`, `p9np`,
+  and similar file-system tools) exports no such entry point and never sees a
+  credential. The collector now reads the provider DLL's export table (read-only,
+  the DLL is never loaded) and records `logonNotify`; the check reports a provider
+  only when it registers `NPLogonNotify`, or when the DLL's exports could not be
+  read (then the finding says the risk is unconfirmed). Previously any
+  non-Microsoft provider was reported as capturing passwords, a false positive on
+  legitimate drive-mapping tools.
+
 ## [2.5] - 2026-11-09
 ### Added
 - `-ExploitsOnline` / `-ExploitFile`: for the CVEs `software_cve` already finds

@@ -232,14 +232,17 @@
     "consentPromptBehaviorAdmin": 2,
     "localAccountTokenFilterPolicy": null,
     "filterAdministratorToken": 1,
-    "alwaysInstallElevated": null
+    "alwaysInstallElevated": null,
+    "alwaysInstallElevatedUsers": [],
+    "alwaysInstallElevatedUserHives": 1
   },
   "powershell": {
     "scriptBlockLogging": 1,
     "moduleLogging": 1,
     "transcription": 1,
     "v2EngineVersion": "",
-    "v2EngineFile": false
+    "v2EngineFile": false,
+    "v2ClrFile": false
   },
   "audit": null,
   "securityPolicy": null,
@@ -3695,7 +3698,8 @@
           "name": "scecli",
           "exists": true,
           "signer": "Microsoft Windows",
-          "status": "Valid"
+          "status": "Valid",
+          "changeNotify": true
         }
       ]
     },

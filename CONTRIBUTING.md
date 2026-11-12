@@ -42,5 +42,36 @@ issue: see [SECURITY.md](SECURITY.md).
 
 6. Open a pull request describing what changes and why.
 
+## Framework data (DISA STIG, CIS, Essential Eight, ACN)
+
+None of it updates itself, by design: the tools in `tools\` build `data\` from
+sources you fetch yourself and none of them touches the network, and nothing a
+host is judged against changes behind your back between two runs of the same
+release.
+
+- `data\stig-catalog.json` is built by `tools\Convert-PowerStigData.ps1` from
+  Microsoft PowerSTIG's processed XML. It records the file and the STIG version
+  and release (`V2R7`) of each product, and the date it was built: the report and
+  `COVERAGE.md` read the release from there, so nothing else keeps a copy of it.
+- `data\cis-map.json` is built by `tools\Convert-CisMapping.ps1` from local
+  clones of the ansible-lockdown `Windows-*-CIS` roles, and records each
+  benchmark version.
+- The Essential Eight requirements are in `lib\Checks.ps1`
+  (`$script:E8Requirements`, with `$script:E8ModelVersion` naming the ASD model
+  release) and the ACN measures in `data\acn-nis2-measures.json`. Both come from
+  documents, not from data: they are updated by hand.
+
+Before a release, `tools\Test-CatalogVersions.ps1` says whether a newer release
+sits in your local clones and whether the shipped data still matches the
+converters. It reads local files only:
+
+```powershell
+.\tools\Test-CatalogVersions.ps1 -StigDir C:\src\PowerSTIG\source\StigData\Processed -CisDir C:\src\ansible-lockdown
+```
+
+Rebuilding a catalog means re-running its converter, then
+`tools\New-CoverageDoc.ps1`, the demo report, and the counts in
+`tests\Run-Regression.ps1`.
+
 Only synthetic data goes into `examples\` and `tests\`. By contributing you
 agree that your work is released under the [MIT License](LICENSE).

@@ -341,14 +341,22 @@
     "consentPromptBehaviorAdmin": 0,
     "localAccountTokenFilterPolicy": 1,
     "filterAdministratorToken": 0,
-    "alwaysInstallElevated": 1
+    "alwaysInstallElevated": 1,
+    "alwaysInstallElevatedUsers": [
+      {
+        "user": "jsmith",
+        "value": 1
+      }
+    ],
+    "alwaysInstallElevatedUserHives": 2
   },
   "powershell": {
     "scriptBlockLogging": null,
     "moduleLogging": null,
     "transcription": null,
     "v2EngineVersion": "2.0",
-    "v2EngineFile": true
+    "v2EngineFile": true,
+    "v2ClrFile": true
   },
   "audit": {
     "processCreationIncludeCmdLine": null,
@@ -4453,12 +4461,6 @@
           "exists": true,
           "signer": "Microsoft Windows",
           "status": "Valid"
-        },
-        {
-          "name": "mspwfilt",
-          "exists": true,
-          "signer": null,
-          "status": "NotSigned"
         }
       ],
       "authentication": [
@@ -4474,7 +4476,15 @@
           "name": "scecli",
           "exists": true,
           "signer": "Microsoft Windows",
-          "status": "Valid"
+          "status": "Valid",
+          "changeNotify": true
+        },
+        {
+          "name": "mspwfilt",
+          "exists": true,
+          "signer": null,
+          "status": "NotSigned",
+          "changeNotify": true
         }
       ]
     },

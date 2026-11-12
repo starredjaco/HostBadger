@@ -89,6 +89,8 @@ function New-HostPseudonymizer {
             if ($p -match '^([^\\/]+)[\\/](.+)$' -and $Matches[1] -ieq $hn) { & $add $Matches[2] $kind }
             else { & $addAccount $p $kind }
         }
+        # The users whose own policy sets AlwaysInstallElevated: a profile name, so a person's name.
+        foreach ($au in @($s.uac.alwaysInstallElevatedUsers | Where-Object { $_ })) { & $add $au.user 'USER' }
         # Rights held by an account that could not be turned into a SID are listed by name.
         if ($s.securityPolicy -and $s.securityPolicy.privilegeRights) {
             foreach ($pn in @($s.securityPolicy.privilegeRights.PSObject.Properties)) {

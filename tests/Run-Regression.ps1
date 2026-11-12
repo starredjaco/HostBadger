@@ -120,7 +120,16 @@ $krb = @($weak.Findings | Where-Object { $_.Type -eq 'kerberos_rc4_allowed' })[0
 Assert-True ($krb.Found -eq 'not set' -and $krb.Expected -eq '2147483640' -and -not (Has $hard 'kerberos_rc4_allowed')) 'Kerberos: not set is a CIS finding with Found and Expected; AES only is clean'
 $krbSnap = Import-HostSnapshot (Join-Path $fleet 'hostsnapshot_hardened.json'); $krbSnap.hardening.kerberosEncryptionTypes = 0x1F
 Assert-True (@((Invoke-HostChecks -Snapshot $krbSnap -Config $config).Findings | Where-Object { $_.Type -eq 'kerberos_rc4_allowed' -and $_.Severity -eq 'High' -and $_.Detail -match 'allows DES and RC4' }).Count -eq 1) 'Kerberos: DES allowed is High'
-Assert-Equal ((@($weak.Findings | Where-Object { $_.Type -eq 'persistence_registry_hijack' }) | ForEach-Object { "$($_.Object)|$($_.Severity)" }) -join ';') 'IFEO debugger: sethc.exe|High;LSA security package: mspwfilt|High;print monitor: Contoso Print Monitor|Low' 'persistence: the logon screen debugger and an unsigned LSA package are High, a vendor-signed print monitor Low, Microsoft-signed entries are not listed'
+Assert-Equal ((@($weak.Findings | Where-Object { $_.Type -eq 'persistence_registry_hijack' }) | ForEach-Object { "$($_.Object)|$($_.Severity)" }) -join ';') 'IFEO debugger: sethc.exe|High;LSA notification package: mspwfilt|High;print monitor: Contoso Print Monitor|Low' 'persistence: the logon screen debugger and an unsigned LSA package are High, a vendor-signed print monitor Low, Microsoft-signed entries are not listed'
+# A password filter sees a password only if it registers InitializeChangeNotify: one that does not is a
+# step lower and says so, and an unreadable export table stays unconfirmed.
+$lsaSnap = Import-HostSnapshot (Join-Path $fleet 'hostsnapshot_weak.json')
+Assert-True (@($weak.Findings | Where-Object { $_.Type -eq 'persistence_registry_hijack' -and $_.Object -eq 'LSA notification package: mspwfilt' -and $_.Detail -match 'registers InitializeChangeNotify' }).Count -eq 1) 'LSA password filter: with InitializeChangeNotify the finding says every new password reaches it'
+foreach ($l in @($lsaSnap.persistence.lsa.notification | Where-Object { $_.name -eq 'mspwfilt' })) { $l.changeNotify = $false }
+Assert-True (@((Invoke-HostChecks -Snapshot $lsaSnap -Config $config).Findings | Where-Object { $_.Type -eq 'persistence_registry_hijack' -and $_.Object -eq 'LSA notification package: mspwfilt' -and $_.Severity -eq 'Medium' -and $_.Detail -match 'exports no InitializeChangeNotify' }).Count -eq 1) 'LSA password filter: without InitializeChangeNotify LSASS drops it, so it is a step lower and sees no password'
+foreach ($l in @($lsaSnap.persistence.lsa.notification | Where-Object { $_.name -eq 'mspwfilt' })) { $l.PSObject.Properties.Remove('changeNotify') }
+Assert-True (@((Invoke-HostChecks -Snapshot $lsaSnap -Config $config).Findings | Where-Object { $_.Type -eq 'persistence_registry_hijack' -and $_.Object -eq 'LSA notification package: mspwfilt' -and $_.Severity -eq 'High' -and $_.Detail -match 'unconfirmed' }).Count -eq 1) 'LSA password filter: an older snapshot without the export field keeps High and says it is unconfirmed'
+Assert-True (@($weak.Findings | Where-Object { $_.Type -eq 'persistence_registry_hijack' -and $_.Object -like 'LSA security*' }).Count -eq 0 -and @($dc.Findings | Where-Object { $_.Type -eq 'persistence_registry_hijack' -and $_.Object -like 'LSA*' }).Count -eq 0) 'LSA packages: Windows'' own security and authentication packages are not reported'
 Assert-True ((Has $weak 'root_ca_added' 'root CA: 0F1E2D3C4B5A69788796A5B4C3D2E1F00F1E2D3C' 'High') -and @($all | Where-Object { $_.Type -eq 'root_ca_added' -and $_.Object -match '245C97DF' }).Count -eq 0) 'root CAs: an added root with its private key on the host is High; a Windows default outside the program is not reported'
 Assert-True ((Has $weak 'remote_access_tool' 'tool: VNC server' 'Low') -and (Has $lap 'remote_access_tool' 'tool: TeamViewer' 'Low')) 'remote access tools: found by service and by software, Low without an approved list'
 $cfgRat = $config.Clone(); $cfgRat['AllowedRemoteTools'] = @('TeamViewer')
@@ -787,6 +796,14 @@ $pzSnaps = @(Get-ChildItem $fleet -Filter *.json | ForEach-Object { Import-HostS
 $pzFind = @($all)
 $pzTest = New-HostPseudonymizer -Snapshots $pzSnaps -Findings $pzFind
 Assert-True (@(Test-AiLeak -Pz $pzTest -Text 'the account jsmith on WKS-ACCT-017').Count -ge 2) 'leak check flags names that survive'
+# The per-user AlwaysInstallElevated policy names a profile, and the finding prints it: a name that is
+# nowhere else in the snapshot must still be tokenized before anything is sent.
+$pzAie = Import-HostSnapshot (Join-Path $fleet 'hostsnapshot_weak.json')
+$pzAie.uac.alwaysInstallElevatedUsers = @([PSCustomObject]@{ user = 'rtorrini'; value = 1 })
+$pzAieFind = @((Invoke-HostChecks -Snapshot $pzAie -Config $config).Findings)
+Assert-True (@($pzAieFind | Where-Object { $_.Type -eq 'always_install_elevated' -and $_.Detail -match 'rtorrini' }).Count -eq 1) 'AlwaysInstallElevated: the finding names the user whose policy is set'
+$pzAiePz = New-HostPseudonymizer -Snapshots @($pzAie) -Findings $pzAieFind
+Assert-True ((Protect-AiText -Pz $pzAiePz -Text 'the user policy of rtorrini') -match 'USER-\d' -and @(Test-AiLeak -Pz $pzAiePz -Text 'the user policy of rtorrini').Count -ge 1) 'AI: the user whose own policy sets AlwaysInstallElevated is tokenized'
 Assert-True (@(Test-AiLeak -Pz $pzTest -Text 'os_unsupported: Windows version out of support').Count -eq 0 -and @(Test-AiLeak -Pz $pzTest -Text 'Windows version out of support for support').Count -ge 1) 'leak check: a check title is not a leak, the same word outside it still is'
 Assert-True (@(Test-AiLeak -Pz $pzTest -Text 'S-1-5-21-1111111111-2222222222-3333333333-1342 and C:\Users\bob\x.exe').Count -ge 2) 'leak check flags SIDs and drive paths'
 Assert-Equal @(Test-AiLeak -Pz $pzTest -Text 'HOST-1 | account: USER-2 | PATH-3 and C:\Windows\System32\cmd.exe').Count 0 'leak check accepts tokens and stock tools'
@@ -850,6 +867,20 @@ $arBefore = [System.IO.File]::ReadAllText($arHtml)
 $arOut = @(& (Join-Path $root 'HostBadger.ps1') -AiReport $arHtml -Snapshot $fleet, $fleet -AiDryRun $arRead *>&1 | ForEach-Object { "$_" })
 Assert-Equal ([System.IO.File]::ReadAllText($arRead)) ([System.IO.File]::ReadAllText($arDirect)) '-AiReport: the prompt read back from a report is the prompt of its analysis'
 Assert-True ([System.IO.File]::ReadAllText($arDirect) -match 'Comparison with the previous run' -and @($arOut | Where-Object { $_ -like 'Hosts analyzed:*' }).Count -eq 0 -and [System.IO.File]::ReadAllText($arHtml) -ceq $arBefore) '-AiReport: nothing analyzed, and a dry run leaves the report as it is'
+# An older encrypted snapshot of a host of the report must not make the step ask for its password: the
+# step needs the snapshot of that very collection, and in a window (a runspace with no host) a question
+# cannot be answered, so the whole step would fail.
+$arHbxDir = Join-Path $arDir 'withhbx'; New-Item -ItemType Directory -Path $arHbxDir -Force | Out-Null
+Copy-Item -Path (Join-Path $fleet '*.json') -Destination $arHbxDir -Force
+[System.IO.File]::WriteAllBytes((Join-Path $arHbxDir 'hostsnapshot_WKS-ACCT-017_20250101090000.hbx'), ([byte[]](0x48, 0x42, 0x58, 0x31, 1) + (New-Object byte[] 32)))
+$arHbxOut = Join-Path $arDir 'withhbx.txt'
+$arNoHost = [powershell]::Create()
+[void]$arNoHost.AddScript('param($hb, $rep, $snap, $out) & $hb -AiReport $rep -Snapshot $snap -AiDryRun $out *>&1 | Out-Null').AddArgument((Join-Path $root 'HostBadger.ps1')).AddArgument($arHtml).AddArgument($arHbxDir).AddArgument($arHbxOut)
+$arNoHostErr = ''
+try { [void]$arNoHost.Invoke() } catch { $arNoHostErr = "$($_.Exception.Message)" }
+$arNoHostErr = (@($arNoHostErr) + @($arNoHost.Streams.Error | ForEach-Object { "$_" })) -join ' '
+$arNoHost.Dispose()
+Assert-True ((Test-Path -LiteralPath $arHbxOut) -and (Get-Item -LiteralPath $arHbxOut).Length -gt 0 -and $arNoHostErr -notmatch 'prompt|interact') "-AiReport: an older encrypted snapshot of the same host asks for no password, so the step runs where nothing can ask ($arNoHostErr)"
 $arNoSnap = Join-Path $arDir 'nosnap.txt'; $arEmpty = Join-Path $arDir 'empty'; New-Item -ItemType Directory -Path $arEmpty -Force | Out-Null
 $arMissing = @(& (Join-Path $root 'HostBadger.ps1') -AiReport $arHtml -Snapshot $arEmpty -AiDryRun $arNoSnap *>&1 | ForEach-Object { "$_" })
 $arOld = Join-Path $arDir 'old.html'; [System.IO.File]::WriteAllText($arOld, '<html></html>'); [System.IO.File]::WriteAllText((Join-Path $arDir 'old.csv'), 'Severity,Type')
@@ -1043,6 +1074,23 @@ $psSnap.powershell.v2EngineFile = $false
 Assert-Equal @((Invoke-HostChecks -Snapshot $psSnap -Config $config).Findings | Where-Object { $_.Type -eq 'powershell_v2_enabled' }).Count 0 'PowerShell 2.0: a registration without the engine assembly (feature removed by Windows) is not reported'
 $psSnap.powershell.PSObject.Properties.Remove('v2EngineFile')
 Assert-Equal @((Invoke-HostChecks -Snapshot $psSnap -Config $config).Findings | Where-Object { $_.Type -eq 'powershell_v2_enabled' }).Count 1 'PowerShell 2.0: an older snapshot without the file field is judged on the registration'
+# The downgrade also needs the .NET 2.0 CLR (v2.0.50727, the NetFx3 feature): without it the engine cannot
+# start, so the finding drops to Low and says why; an older snapshot without the field keeps Medium.
+$clrSnap = Import-HostSnapshot (Join-Path $fleet 'hostsnapshot_weak.json')
+$clrSnap.powershell.v2ClrFile = $false
+Assert-True (@((Invoke-HostChecks -Snapshot $clrSnap -Config $config).Findings | Where-Object { $_.Type -eq 'powershell_v2_enabled' -and $_.Severity -eq 'Low' -and $_.Detail -match 'v2\.0\.50727' -and $_.Detail -match 'still to be removed' }).Count -eq 1) 'PowerShell 2.0: without the .NET 2.0 CLR the engine cannot start, so the finding is Low and says the feature is still installed'
+$clrSnap.powershell.PSObject.Properties.Remove('v2ClrFile')
+Assert-True (@((Invoke-HostChecks -Snapshot $clrSnap -Config $config).Findings | Where-Object { $_.Type -eq 'powershell_v2_enabled' -and $_.Severity -eq 'Medium' }).Count -eq 1) 'PowerShell 2.0: an older snapshot without the CLR field keeps Medium'
+# AlwaysInstallElevated: Windows Installer needs the machine policy and the user's own. High only when a
+# loaded profile has it too, Medium when the machine policy is alone or no profile could be read.
+Assert-True (@($weak.Findings | Where-Object { $_.Type -eq 'always_install_elevated' -and $_.Severity -eq 'High' -and $_.Detail -match 'user policy of jsmith' -and $_.Found -eq '1 (machine and user policy)' }).Count -eq 1) 'AlwaysInstallElevated: machine and user policy set is High and names the user'
+$aieSnap = Import-HostSnapshot (Join-Path $fleet 'hostsnapshot_weak.json')
+$aieSnap.uac.alwaysInstallElevatedUsers = @()
+Assert-True (@((Invoke-HostChecks -Snapshot $aieSnap -Config $config).Findings | Where-Object { $_.Type -eq 'always_install_elevated' -and $_.Severity -eq 'Medium' -and $_.Detail -match 'none of the 2 loaded user profile' }).Count -eq 1) 'AlwaysInstallElevated: the machine policy alone installs nothing elevated, so it is Medium'
+$aieSnap.uac.alwaysInstallElevatedUserHives = 0
+Assert-True (@((Invoke-HostChecks -Snapshot $aieSnap -Config $config).Findings | Where-Object { $_.Type -eq 'always_install_elevated' -and $_.Severity -eq 'Medium' -and $_.Detail -match 'no user profile was loaded' }).Count -eq 1) 'AlwaysInstallElevated: with no loaded profile the per-user half is unconfirmed'
+$aieSnap.uac.PSObject.Properties.Remove('alwaysInstallElevatedUserHives')
+Assert-True (@((Invoke-HostChecks -Snapshot $aieSnap -Config $config).Findings | Where-Object { $_.Type -eq 'always_install_elevated' -and $_.Severity -eq 'Medium' -and $_.Detail -match 'older collector' }).Count -eq 1) 'AlwaysInstallElevated: an older snapshot says the per-user policy is unconfirmed'
 # Service permissions: reconfiguring is High, deleting Medium, starting alone is not reported.
 Assert-True (Has $weak 'service_permissions_weak' 'service: LegacyBackup' 'High') 'service permissions: Users may change the configuration: High'
 Assert-True (@($weak.Findings | Where-Object { $_.Type -eq 'service_permissions_weak' -and $_.Object -eq 'service: GameLauncherSvc' -and $_.Severity -eq 'Medium' -and $_.Detail -match 'Everyone may Start, Stop, Delete' }).Count -eq 1) 'service permissions: Everyone may delete: Medium, and the rights are named'
@@ -1682,6 +1730,28 @@ $coverage = [System.IO.File]::ReadAllText((Join-Path $root 'COVERAGE.md'))
 $missingDoc = @($script:CheckCatalog.Keys | Where-Object { $coverage -notmatch [regex]::Escape("``$_``") })
 Assert-Equal ($missingDoc -join ',') '' 'COVERAGE.md lists every check'
 Assert-True ([System.IO.File]::ReadAllText((Join-Path $root 'README.md')) -match "\*\*$($script:CheckCatalog.Count) checks\*\*") 'README states the check count'
+# The STIG release lives in the catalog alone: the report, COVERAGE.md and the converter must not name
+# one the shipped rules were not built from.
+$stigTypes2 = @($script:CheckCatalog.Keys | Where-Object { $_ -like 'stig_*' })
+Assert-Equal (@($stigTypes2 | Where-Object { -not (Get-StigRelease $_) }) -join ',') '' 'the STIG catalog carries the release of every stig_* check'
+$catReleases = @($stigTypes2 | ForEach-Object { Get-StigRelease $_ } | Where-Object { $_ } | Select-Object -Unique)
+$docReleases = @([regex]::Matches($coverage, '\bV\d+R\d+\b') | ForEach-Object { $_.Value } | Select-Object -Unique)
+Assert-Equal (@($docReleases | Where-Object { $catReleases -notcontains $_ }) -join ',') '' 'COVERAGE.md names no STIG release the catalog was not built from'
+Assert-Equal (@($catReleases | Where-Object { $docReleases -notcontains $_ }) -join ',') '' 'COVERAGE.md names the release of every product the catalog holds'
+Assert-Equal (Get-StigTypeLabel 'stig_windows11') "Windows 11 $(Get-StigRelease 'stig_windows11')" 'the dashboard label is the product and the release from the catalog'
+$savedStigRel = $script:StigReleases
+$script:StigReleases = $null
+Assert-Equal (Get-StigTypeLabel 'stig_windows11') 'Windows 11' 'a catalog from an older release (no releases in it) gives the product name alone'
+$script:StigReleases = $savedStigRel
+Assert-True ([System.IO.File]::ReadAllText((Join-Path $root 'examples\demo_report.html')) -match [regex]::Escape("Windows 11 $(Get-StigRelease 'stig_windows11')")) 'the report names the STIG release of the catalog'
+# The catalog and tools\Convert-PowerStigData.ps1 must agree on which files HostBadger ships.
+$stigConvAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'tools\Convert-PowerStigData.ps1'), [ref]$null, [ref]$null)
+$stigFilesParam = @($stigConvAst.ParamBlock.Parameters | Where-Object { "$($_.Name)" -eq '$Files' })
+Assert-Equal $stigFilesParam.Count 1 'the STIG converter still takes -Files'
+$stigDefaults = & ([scriptblock]::Create($stigFilesParam[0].DefaultValue.Extent.Text))
+$catJson = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText((Join-Path $root 'data\stig-catalog.json')))
+Assert-Equal (@($stigDefaults.Keys | Where-Object { "$($catJson.releases.$_.file)" -ne "$($stigDefaults[$_])" } | Sort-Object) -join ',') '' 'the STIG catalog was built from the files the converter defaults to'
+Assert-True ("$($catJson.built)" -match '^\d{4}-\d{2}-\d{2}$' -and @($catJson.rules).Count -eq @(Get-StigCatalog).Count) 'the STIG catalog says when it was built and its rules are the ones loaded'
 # The collector ships with the analyzer: both print the release they belong to.
 $verOf = { param($file, $var) if ([System.IO.File]::ReadAllText((Join-Path $root $file)) -match "\`$script:$var = '([^']+)'") { $Matches[1] } }
 Assert-Equal (& $verOf 'Collect-HostSnapshot.ps1' 'CollectorVersion') (& $verOf 'HostBadger.ps1' 'HostBadgerVersion') 'collector and analyzer carry the same version'
@@ -1736,6 +1806,24 @@ Assert-True ($guiOut -match 'AI offer: Send to Gemini / Dry run \(write the prom
 $aiGui = [System.IO.File]::ReadAllText((Join-Path $root 'Start-HostBadgerGui.ps1'))
 Assert-True ($aiGui -match "elseif \(\`$ok\) \{ \`$ui\.Tabs\.SelectedItem = \`$ui\.TabResults; Invoke-AiOffer \}" -and $aiGui -match "\`$ai = @\{ AiReport = \`$target; Snapshot = \`$sources \}" -and $aiGui -match 'if \(-not \$script:Kept -and -not \(Select-AiReport\)\) \{ return \}' -and $aiGui -notmatch 'analyzed again into') 'window: the AI question follows an analysis, and with no analysis in memory the AI buttons ask for a report and never analyze'
 Assert-True ($guiOut -match 'Fix reuse: recent True, older False, other options False, same choices elsewhere True, other choices False') "window: Fix this machine reuses only a recent collection with the same options, and its analysis only with the same choices ($($guiOut -replace '\s+', ' '))"
+# The AI step on a report needs the snapshot of that very collection: an older encrypted snapshot of the
+# same host must not stop it while the report's own snapshot lies beside it, readable.
+$lockAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Start-HostBadgerGui.ps1'), [ref]$null, [ref]$null)
+foreach ($fn in 'Get-LocalSnapshotFiles', 'Test-PasswordSnapshot', 'Get-LockedReportSnapshots') {
+    $fnName = $fn
+    $fnDef = $lockAst.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fnName }, $true)
+    Assert-True ($null -ne $fnDef) "window: $fn is in the window's source"
+    if ($fnDef) { . ([scriptblock]::Create($fnDef.Extent.Text)) }
+}
+$lockDir = Join-Path $work 'aireport'
+New-Item -ItemType Directory -Path $lockDir -Force | Out-Null
+# "HBX1" and mode 1: a snapshot encrypted with a password (the header is all these functions read).
+[System.IO.File]::WriteAllBytes((Join-Path $lockDir 'hostsnapshot_WKS-1_20261001080000.hbx'), ([byte[]](0x48, 0x42, 0x58, 0x31, 1) + (New-Object byte[] 32)))
+[System.IO.File]::WriteAllBytes((Join-Path $lockDir 'hostsnapshot_WKS-1_20261110120000.zip'), [byte[]](0x50, 0x4B, 0x03, 0x04))
+Assert-Equal @(Get-LockedReportSnapshots -Sources @($lockDir) -Hosts @([PSCustomObject]@{ name = 'WKS-1'; collected = '2026-11-10 12:00 UTC' }) | Where-Object { $_ }).Count 0 'window: an older encrypted snapshot does not stop the AI step on a report whose own snapshot is readable'
+$lockHit = @(Get-LockedReportSnapshots -Sources @($lockDir) -Hosts @([PSCustomObject]@{ name = 'WKS-1'; collected = '2026-10-01 08:00 UTC' }) | Where-Object { $_ })
+Assert-True ($lockHit.Count -eq 1 -and $lockHit[0].Name -like '*20261001080000.hbx') 'window: a report whose own snapshot is the encrypted one asks for the password'
+Assert-Equal @(Get-LockedReportSnapshots -Sources @($lockDir) -Hosts @([PSCustomObject]@{ name = 'OTHER-HOST'; collected = '2026-10-01 08:00 UTC' }) | Where-Object { $_ }).Count 0 'window: an encrypted snapshot of another host is not this report''s'
 $guiSrc = [System.IO.File]::ReadAllText((Join-Path $root 'Start-HostBadgerGui.ps1'))
 Assert-True ($guiSrc -notmatch "'HostBadger: apply the fixes', 'YesNo'" -and $guiSrc -match 'x:Name="ApplyNoBtn"' -and $guiSrc -notmatch 'ApplyYesBtn"[^>]*IsDefault') 'window: applying needs the Apply button of the panel, never a default answer'
 Assert-True ($guiSrc -match '\$ui\.StopBtn\.Add_Click\(\{ Stop-GuiTask \}\)' -and $guiSrc -match '\$ui\.FixStopBtn\.Add_Click\(\{ Stop-GuiTask \}\)' -and $guiSrc -match 'StopBtn\.IsEnabled = \$busy' -and $guiSrc -match "-like 'Applying\*'\) \{\s+\`$warn = .*Stop anyway") 'window: Stop stops the running step, and asks first while fixes are applied'

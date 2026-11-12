@@ -348,7 +348,7 @@ function ConvertTo-ReportSummaryJson {
         $stig = @(foreach ($t in @($script:StigTypeLabel.Keys)) {
                 $ev = if ($hostItem.StigByType) { [int]$hostItem.StigByType[$t] } else { 0 }
                 if ($ev -le 0) { continue }
-                [ordered]@{ product = "$($script:StigTypeLabel[$t])"; evaluated = $ev; failed = [Math]::Min($ev, @($mine | Where-Object { $_.Type -eq $t }).Count) }
+                [ordered]@{ product = "$(Get-StigTypeLabel $t)"; evaluated = $ev; failed = [Math]::Min($ev, @($mine | Where-Object { $_.Type -eq $t }).Count) }
             })
         $collected = if ($hostItem.CollectedUtc) { ([datetime]$hostItem.CollectedUtc).ToString('yyyy-MM-dd HH:mm') + ' UTC' } else { '' }
         $hostList.Add([ordered]@{
@@ -528,7 +528,7 @@ function Get-DashboardHtml {
         foreach ($t in $stigTypes) {
             $ev = ($hostsArr | ForEach-Object { [int]$_.StigByType[$t] } | Measure-Object -Sum).Sum
             $bad = [Math]::Min($ev, @($All | Where-Object { $_.Type -eq $t }).Count)
-            & $w "<tr><td>$(& $H $script:StigTypeLabel[$t])</td><td class='num'>$($ev - $bad)/$ev</td><td class='bar'>$(Get-DashBar (100 * ($ev - $bad) / [Math]::Max(1, $ev)))</td></tr>"
+            & $w "<tr><td>$(& $H (Get-StigTypeLabel $t))</td><td class='num'>$($ev - $bad)/$ev</td><td class='bar'>$(Get-DashBar (100 * ($ev - $bad) / [Math]::Max(1, $ev)))</td></tr>"
         }
         & $w '</table></div>'
     }
@@ -596,7 +596,7 @@ function Get-DashboardHtml {
     }
     if ($e8Judged -gt 0) {
         $pE = 100 * $e8Met / $e8Judged
-        & $w "<div class='dash-panel'><div class='dash-panel-head'>$(Get-RingSvg -Percent $pE -Big "ML$overall" -Small 'from a host')<div><div class='dash-panel-title'>ACSC Essential Eight</div><div class='meta'>Maturity levels from the requirements a host shows (ASD model, November 2023): $e8Met of $e8Judged met$(if ($hostsArr.Count -gt 1) { ', lowest host per strategy' }). Multi-factor authentication, backups, central logging and scanning cadence need evidence a host does not hold, so this is an upper bound, not an assessment.$(if ($overallCapped) { ' ML<n>+? means a requirement of the next level could not be judged.' })</div></div></div><table class='dash-table'>$($e8Rows -join '')</table></div>"
+        & $w "<div class='dash-panel'><div class='dash-panel-head'>$(Get-RingSvg -Percent $pE -Big "ML$overall" -Small 'from a host')<div><div class='dash-panel-title'>ACSC Essential Eight</div><div class='meta'>Maturity levels from the requirements a host shows (ASD model, $($script:E8ModelVersion)): $e8Met of $e8Judged met$(if ($hostsArr.Count -gt 1) { ', lowest host per strategy' }). Multi-factor authentication, backups, central logging and scanning cadence need evidence a host does not hold, so this is an upper bound, not an assessment.$(if ($overallCapped) { ' ML<n>+? means a requirement of the next level could not be judged.' })</div></div></div><table class='dash-table'>$($e8Rows -join '')</table></div>"
     }
     # NIS2 in Italy: the ACN basic measures a host shows (Get-AcnStatus, per host). A requirement tied to
     # several rows (one per group of checks) counts once: not met when one row is not met on a host.

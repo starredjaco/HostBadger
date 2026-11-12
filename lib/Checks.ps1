@@ -179,7 +179,7 @@ $script:CheckCatalog = [ordered]@{
         Remediation = 'Remove LocalAccountTokenFilterPolicy (or set 0) and use domain accounts for remote administration.' }
     always_install_elevated = @{ Category = 'Privilege Escalation'; Severity = 'High'; Mitre = 'T1548'; Needs = @('uac'); Roles = $script:AllRoles
         Title = 'AlwaysInstallElevated enabled'
-        Description = 'Windows Installer packages install with SYSTEM rights for every user (when the per-user policy is set too, which a user can do): any user becomes SYSTEM with a crafted .msi.'
+        Description = 'AlwaysInstallElevated = 1 in the machine policy. Windows Installer installs a package with SYSTEM rights only when the per-user policy is set as well, so a crafted .msi makes any user SYSTEM once both halves are there. High when a loaded user profile has it too (the privilege escalation is live), Medium when the machine policy is alone or the user profiles could not be read: CIS and the STIG expect 0 either way, and the user half can arrive with the next policy refresh.'
         Remediation = 'Set "Always install with elevated privileges" to Disabled in both computer and user policy.' }
 
     # ---------------- Privilege escalation ----------------
@@ -235,7 +235,7 @@ $script:CheckCatalog = [ordered]@{
         Remediation = 'Enable "Turn on PowerShell Script Block Logging" and forward Microsoft-Windows-PowerShell/Operational.' }
     powershell_v2_enabled = @{ Category = 'Logging'; Severity = 'Medium'; Mitre = 'T1562.010'; Needs = @('powershell'); Roles = $script:AllRoles
         Title = 'PowerShell 2.0 engine installed'
-        Description = 'powershell -Version 2 starts an engine without script block logging, AMSI or Constrained Language Mode: the classic downgrade to escape logging.'
+        Description = 'powershell -Version 2 starts an engine without script block logging, AMSI or Constrained Language Mode: the classic downgrade to escape logging. The engine runs on the .NET 2.0 CLR (v2.0.50727, installed with the NetFx3 optional feature): where that is absent it cannot start at all, and the finding is Low, since the feature is still installed and still to be removed.'
         Remediation = 'Remove the optional feature: Disable-WindowsOptionalFeature -Online -FeatureName MicrosoftWindowsPowerShellV2Root (Remove-WindowsFeature PowerShell-V2 on servers).' }
     security_log_small = @{ Category = 'Logging'; Severity = 'Low'; Mitre = 'T1070.001'; Cis = '18.10.25.2.2 (L1)'; Needs = @('audit'); Roles = $script:AllRoles
         Title = 'Security event log too small'
@@ -661,7 +661,7 @@ $script:CheckCatalog = [ordered]@{
         Remediation = 'Find out which product created the consumer. If nobody does, remove the binding, the consumer and the filter (Get-CimInstance -Namespace root/subscription ... | Remove-CimInstance) and investigate the host as compromised. Keep the WMI-Activity operational log and the ASR rule "Block persistence through WMI event subscription" on.' }
     persistence_registry_hijack = @{ Category = 'Persistence'; Severity = 'High'; Mitre = 'T1546.012'; Needs = @('persistence'); Roles = $script:AllRoles
         Title = 'Code planted in a Windows load point'
-        Description = 'A registry load point starts code that is not part of Windows: an Image File Execution Options Debugger (the program named runs instead of the one started; on sethc.exe or utilman.exe it gives a SYSTEM prompt at the logon screen), a SilentProcessExit monitor, AppInit_DLLs (loaded into every program that uses user32.dll), a Winlogon Shell or Userinit other than Windows'' own, or an LSA security, authentication or notification package, a print monitor or a netsh helper whose DLL is not signed by Microsoft. LSA packages see every password typed at logon. High: an unsigned LSA package, SilentProcessExit, AppInit_DLLs, a changed Winlogon value or a debugger on the logon screen tools. Medium: a vendor-signed LSA package (verify the product), an unsigned print monitor or netsh helper, another IFEO debugger. Low: a vendor-signed monitor or helper, or an entry whose file does not exist.'
+        Description = 'A registry load point starts code that is not part of Windows: an Image File Execution Options Debugger (the program named runs instead of the one started; on sethc.exe or utilman.exe it gives a SYSTEM prompt at the logon screen), a SilentProcessExit monitor, AppInit_DLLs (loaded into every program that uses user32.dll), a Winlogon Shell or Userinit other than Windows'' own, or an LSA security, authentication or notification package, a print monitor or a netsh helper whose DLL is not signed by Microsoft. A security or authentication package takes part in authentication and sees the credentials used for it; a notification package is a password filter, and LSASS hands it every new password in clear only if it registers InitializeChangeNotify (one that does not is reported a step lower: its code still runs inside LSASS, but it sees no password). High: an unsigned LSA package, SilentProcessExit, AppInit_DLLs, a changed Winlogon value or a debugger on the logon screen tools. Medium: a vendor-signed LSA package (verify the product), an unsigned print monitor or netsh helper, another IFEO debugger. Low: a vendor-signed monitor or helper, or an entry whose file does not exist.'
         Remediation = 'Find the product the entry belongs to. If none, remove the value, delete the file it points to and investigate the host as compromised. For a legitimate vendor component, keep it current and accept it with an exception; protect LSASS (RunAsPPL) so unsigned LSA packages cannot load.' }
 
     persistence_credential_capture = @{ Category = 'Persistence'; Severity = 'High'; Mitre = 'T1556.008'; Needs = @('loadPoints'); Roles = $script:AllRoles
@@ -2401,7 +2401,12 @@ function Invoke-SoftwareChecks {
 # data\stig-catalog.json comes from tools\Convert-PowerStigData.ps1 (PowerSTIG data, MIT; STIG content
 # by DISA). Entry: id, p (product), s (H/M/L), h (M machine, U per user), k (key under the hive), n
 # (value name), t (D/S/M/N), e (P present, A absent), x (expected: eq, in, range, absent), d (why).
+# The file holds "rules" (those entries), "releases" (per product the PowerSTIG file and the STIG version
+# and release it was built from, V2R7) and the date it was built. Nothing else keeps a copy of the
+# release: the report and COVERAGE.md read it from here, so they cannot drift from the rules shipped.
 $script:StigCatalog = $null
+$script:StigReleases = $null
+$script:StigBuilt = ''
 $script:StigProductType = @{ win10 = 'stig_windows10'; win11 = 'stig_windows11'; defender = 'stig_defender'; firewall = 'stig_firewall'; edge = 'stig_edge'; chrome = 'stig_chrome'; firefox = 'stig_firefox'; office = 'stig_office'; adobereader = 'stig_adobe'; adobepro = 'stig_adobe'
     srv2016dc = 'stig_server2016'; srv2016ms = 'stig_server2016'; srv2019dc = 'stig_server2019'; srv2019ms = 'stig_server2019'; srv2022dc = 'stig_server2022'; srv2022ms = 'stig_server2022'; srv2025dc = 'stig_server2025'; srv2025ms = 'stig_server2025' }
 $script:StigIdPrefix = @{ win10 = 'WN10'; win11 = 'WN11'; defender = 'MSDA'; firewall = 'WFW'; edge = 'EDGE'; chrome = 'CHRM'; firefox = 'FFOX'; office = 'O365'; adobereader = 'ARDC'; adobepro = 'AADC'
@@ -2410,10 +2415,29 @@ $script:StigIdPrefix = @{ win10 = 'WN10'; win11 = 'WN11'; defender = 'MSDA'; fir
 function Get-StigCatalog {
     if ($null -eq $script:StigCatalog) {
         $path = Join-Path $PSScriptRoot '..\data\stig-catalog.json'
+        $raw = if (Test-Path -LiteralPath $path) { ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($path)) } else { $null }
+        # The catalog is an object with the releases and the rules; an older one is the rules alone.
+        $rules = if ($raw -and $raw.PSObject.Properties['rules']) { $raw.rules } else { $raw }
+        $script:StigReleases = if ($raw -and $raw.PSObject.Properties['releases']) { $raw.releases } else { $null }
+        $script:StigBuilt = if ($raw -and $raw.PSObject.Properties['built']) { "$($raw.built)" } else { '' }
         # Windows PowerShell 5.1 hands a JSON array back as one object: the second pipe takes it apart.
-        $script:StigCatalog = if (Test-Path -LiteralPath $path) { @(ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($path)) | ForEach-Object { $_ }) } else { @() }
+        $script:StigCatalog = @($rules | ForEach-Object { $_ } | Where-Object { $_ })
     }
     return $script:StigCatalog
+}
+
+function Get-StigRelease {
+    # The STIG version and release the catalog was built from, for one stig_* check type ("V2R7"). Empty
+    # when the catalog does not say (one built before 2.7). The domain controller and member server
+    # products of a Windows Server STIG are one release.
+    param([string]$Type)
+    $null = Get-StigCatalog
+    if (-not $script:StigReleases) { return '' }
+    foreach ($p in @($script:StigProductType.Keys | Where-Object { $script:StigProductType[$_] -eq $Type } | Sort-Object)) {
+        $r = "$($script:StigReleases.$p.release)"
+        if ($r) { return $r }
+    }
+    return ''
 }
 
 # data\cis-map.json comes from tools\Convert-CisMapping.ps1 (ansible-lockdown roles, MIT): for each
@@ -3118,7 +3142,24 @@ function Invoke-AccountChecks {
         if ((& $can 'uac_disabled') -and "$($u.enableLua)" -eq '0') { Add-Finding -Type 'uac_disabled' -Object 'UAC' -Found '0' -Expected '1' -Detail 'EnableLUA = 0.' }
         if ((& $can 'uac_admin_no_prompt') -and "$($u.consentPromptBehaviorAdmin)" -eq '0') { Add-Finding -Type 'uac_admin_no_prompt' -Object 'UAC' -Found '0' -Expected '1 or 2' -Detail 'ConsentPromptBehaviorAdmin = 0.' }
         if ((& $can 'remote_uac_token_filter_off') -and "$($u.localAccountTokenFilterPolicy)" -eq '1') { Add-Finding -Type 'remote_uac_token_filter_off' -Object 'UAC' -Found '1' -Expected '0' -Detail 'LocalAccountTokenFilterPolicy = 1.' }
-        if ((& $can 'always_install_elevated') -and "$($u.alwaysInstallElevated)" -eq '1') { Add-Finding -Type 'always_install_elevated' -Object 'Windows Installer' -Detail 'AlwaysInstallElevated = 1 in the machine policy.' }
+        # An .msi installs with SYSTEM rights only when AlwaysInstallElevated is 1 in the machine policy
+        # AND in the user's own policy: the machine value alone installs nothing elevated. The loaded
+        # profiles say which it is; with none read (or an older snapshot) it stays unconfirmed. The machine
+        # policy on its own is still a finding (CIS and the STIG expect 0, and the user half can arrive
+        # with the next policy refresh), one step below the privilege escalation it is not yet.
+        if ((& $can 'always_install_elevated') -and "$($u.alwaysInstallElevated)" -eq '1') {
+            $aieUsers = @($u.alwaysInstallElevatedUsers | Where-Object { $_ -and "$($_.value)" -eq '1' })
+            $aieHives = if ($null -ne $u.alwaysInstallElevatedUserHives) { [int]$u.alwaysInstallElevatedUserHives } else { -1 }
+            if ($aieUsers.Count -gt 0) {
+                Add-Finding -Type 'always_install_elevated' -Object 'Windows Installer' -Found '1 (machine and user policy)' -Expected '0' -Detail "AlwaysInstallElevated = 1 in the machine policy and in the user policy of $(@($aieUsers | ForEach-Object { "$($_.user)" }) -join ', '): any .msi those users run installs as SYSTEM."
+            }
+            elseif ($aieHives -gt 0) {
+                Add-Finding -Type 'always_install_elevated' -Object 'Windows Installer' -Severity 'Medium' -Found '1 (machine policy only)' -Expected '0' -Detail "AlwaysInstallElevated = 1 in the machine policy; none of the $aieHives loaded user profile(s) has the per-user policy, which Windows Installer needs as well, so an .msi does not install elevated as things stand. The moment the user policy arrives, any user becomes SYSTEM."
+            }
+            else {
+                Add-Finding -Type 'always_install_elevated' -Object 'Windows Installer' -Severity 'Medium' -Found '1 (machine policy)' -Expected '0' -Detail "AlwaysInstallElevated = 1 in the machine policy; $(if ($aieHives -eq 0) { 'no user profile was loaded' } else { 'this snapshot comes from an older collector' }), so whether a user also has the per-user policy Windows Installer needs is unconfirmed."
+            }
+        }
     }
 }
 
@@ -3334,9 +3375,18 @@ function Invoke-LoggingChecks {
             Add-Finding -Type 'powershell_module_logging_off' -Object 'PowerShell module logging' -Detail 'EnableModuleLogging not set to 1.'
         }
         # A registration without the engine's assembly is left over from a removed feature (older
-        # snapshots have no v2EngineFile: the registration alone decides).
+        # snapshots have no v2EngineFile: the registration alone decides). The downgrade itself needs the
+        # .NET 2.0 CLR as well: powershell -Version 2 runs on v2.0.50727, which comes with the NetFx3
+        # optional feature, and without it the engine does not start ("The version v2.0.50727 of the .NET
+        # Framework is not installed"). The feature is still there to remove (Essential Eight ML3), so the
+        # finding stays, a step lower and saying so; older snapshots have no v2ClrFile and keep Medium.
         if ((& $can 'powershell_v2_enabled') -and "$($p.v2EngineVersion)" -eq '2.0' -and $p.v2EngineFile -ne $false) {
-            Add-Finding -Type 'powershell_v2_enabled' -Object 'PowerShell 2.0' -Detail 'The 2.0 engine is registered (optional feature installed).'
+            if ($p.v2ClrFile -eq $false) {
+                Add-Finding -Type 'powershell_v2_enabled' -Object 'PowerShell 2.0' -Severity 'Low' -Detail 'The 2.0 engine is registered (optional feature installed), but the .NET 2.0 CLR (v2.0.50727, the NetFx3 feature) is not installed: powershell -Version 2 cannot start, so the downgrade is unavailable until .NET 3.5 is added. The feature is still installed and still to be removed.'
+            }
+            else {
+                Add-Finding -Type 'powershell_v2_enabled' -Object 'PowerShell 2.0' -Detail "The 2.0 engine is registered (optional feature installed)$(if ($p.v2ClrFile -eq $true) { ' and the .NET 2.0 CLR it runs on is installed' })."
+            }
         }
     }
 }
@@ -3960,11 +4010,25 @@ $script:BloatwareApps = @(
     @{ Label = 'WildTangent Games'; Program = '^WildTangent\b' }
 )
 # The STIG release behind each check type, for the dashboard (keep in step with tools\New-CoverageDoc.ps1).
+# The product each stig_* check judges. The release is not written here: Get-StigTypeLabel adds the one
+# the catalog was built from, so this list cannot promise a release the rules do not come from.
 $script:StigTypeLabel = [ordered]@{
-    stig_windows11 = 'Windows 11 V2R7'; stig_windows10 = 'Windows 10 V3R6'; stig_server2025 = 'Windows Server 2025 V1R1'; stig_server2022 = 'Windows Server 2022 V2R8'
-    stig_server2019 = 'Windows Server 2019 V3R8'; stig_server2016 = 'Windows Server 2016 V2R10'; stig_defender = 'Defender Antivirus V2R8'; stig_firewall = 'Windows Firewall V2R2'
-    stig_edge = 'Microsoft Edge V2R5'; stig_chrome = 'Google Chrome V2R11'; stig_firefox = 'Mozilla Firefox V6R7'; stig_office = 'Microsoft 365 Apps V3R5'; stig_adobe = 'Adobe Acrobat V2R1'
+    stig_windows11 = 'Windows 11'; stig_windows10 = 'Windows 10'; stig_server2025 = 'Windows Server 2025'; stig_server2022 = 'Windows Server 2022'
+    stig_server2019 = 'Windows Server 2019'; stig_server2016 = 'Windows Server 2016'; stig_defender = 'Defender Antivirus'; stig_firewall = 'Windows Firewall'
+    stig_edge = 'Microsoft Edge'; stig_chrome = 'Google Chrome'; stig_firefox = 'Mozilla Firefox'; stig_office = 'Microsoft 365 Apps'; stig_adobe = 'Adobe Acrobat'
 }
+function Get-StigTypeLabel {
+    # "Windows 11 V2R7": the product of the check type and the release the catalog carries.
+    param([string]$Type)
+    $name = "$($script:StigTypeLabel[$Type])"
+    if (-not $name) { return "$Type" }
+    $rel = Get-StigRelease $Type
+    if ($rel) { return "$name $rel" }
+    return $name
+}
+# The release of the ASD model these requirements were written from. The report and COVERAGE.md name it
+# from here, so one place says which version HostBadger judges against.
+$script:E8ModelVersion = 'November 2023'
 # ACSC Essential Eight: the requirements of the ASD Essential Eight Maturity Model (November 2023,
 # Appendices A to C) that a host shows, each tied to the HostBadger checks that judge it (Match: a
 # regex on the finding's Object and Detail, for a check that covers several settings). Req is the ASD
@@ -4392,6 +4456,8 @@ function Invoke-PatchChecks {
 # Built-in names of the persistence points: Windows' own entries, so only additions are judged. A DLL
 # signed by Microsoft (Valid) is also Windows' own.
 $script:StockLsaPackages = @('kerberos', 'msv1_0', 'schannel', 'wdigest', 'tspkg', 'pku2u', 'cloudap', 'negoexts', 'scecli', 'rassfm', 'kdcsvc', 'livessp')
+# One step down the severity scale, for a finding whose worst effect is ruled out by the evidence.
+$script:LowerSeverity = @{ Critical = 'High'; High = 'Medium'; Medium = 'Low'; Low = 'Low' }
 $script:StockPrintMonitorDlls = @('appmon.dll', 'localspl.dll', 'fxsmon.dll', 'tcpmon.dll', 'usbmon.dll', 'virtualmon.dll', 'apmon.dll', 'wsdmon.dll')
 $script:StockNetshHelpers = @('2', '4', 'ifmon', 'rasmontr', 'authfwcfg', 'dhcpcmonitor', 'nshdnsclient', 'dot3cfg', 'fwcfg', 'hnetmon', 'netiohlp', 'netprofm', 'nettrace', 'nshhttp', 'nshipsec', 'nshwfp', 'rpcnsh', 'wcnnetsh', 'whhelper', 'wlancfg', 'wshelper', 'wwancfg', 'p2pnetsh', 'peerdistsh')
 # The accessibility programs the logon screen starts: a debugger on them is a SYSTEM prompt without a password.
@@ -4575,7 +4641,21 @@ function Invoke-ExposureChecks {
                         $n = "$($l.name)".ToLower() -replace '\.dll$', ''
                         if ($script:StockLsaPackages -contains $n -or (Test-StockSigner $l)) { continue }
                         $sev = if ($l.exists -eq $false) { 'Low' } elseif ("$($l.status)" -eq 'Valid' -and $l.signer) { 'Medium' } else { 'High' }
-                        Add-Finding -Type 'persistence_registry_hijack' -Object "LSA $kind package: $($l.name)" -Severity $sev -Detail "Loaded into LSASS at boot ($(Get-SignerText $l)): it sees the passwords typed at logon."
+                        # What the package actually sees. A notification package (password filter) is handed
+                        # every new password in clear only if it exports InitializeChangeNotify; LSASS loads
+                        # one that does not and drops it again, so it sees no password at all and the finding
+                        # goes a step lower (its code still ran inside LSASS). $null: exports not readable.
+                        $what = 'it takes part in authentication and sees the credentials used for it'
+                        if ($kind -eq 'authentication') { $what = 'it sees the passwords typed at logon' }
+                        elseif ($kind -eq 'notification') {
+                            if ($l.changeNotify -eq $true) { $what = 'it registers InitializeChangeNotify: LSASS hands it every new password in clear when one is changed' }
+                            elseif ($l.changeNotify -eq $false) {
+                                $sev = $script:LowerSeverity[$sev]
+                                $what = 'it exports no InitializeChangeNotify, so LSASS does not use it as a password filter and it sees no password: its code still runs inside LSASS at every boot'
+                            }
+                            else { $what = 'its export table could not be read, so whether it registers InitializeChangeNotify (and is handed every new password in clear) is unconfirmed' }
+                        }
+                        Add-Finding -Type 'persistence_registry_hijack' -Object "LSA $kind package: $($l.name)" -Severity $sev -Detail "Loaded into LSASS at boot ($(Get-SignerText $l)): $what."
                     }
                 }
             }

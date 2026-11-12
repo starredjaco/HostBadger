@@ -86,7 +86,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:CollectorVersion = '2.6'
+$script:CollectorVersion = '2.7'
 $script:SchemaVersion = 1
 $script:Errors = New-Object System.Collections.Generic.List[object]
 $script:Sections = New-Object System.Collections.Generic.List[string]
@@ -168,6 +168,14 @@ function Get-RegValue {
         return $item.$Name
     }
     catch { return $null }
+}
+
+function Get-ProfileUser {
+    # The user a loaded hive (HKU\<SID>) belongs to: the leaf of its profile folder.
+    param([string]$Sid)
+    $p = "$(Get-RegValue "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$Sid" 'ProfileImagePath')"
+    if ($p) { return (Split-Path -Path $p -Leaf) }
+    return $Sid
 }
 
 function Get-RegSubkeyValues {
@@ -900,12 +908,26 @@ $laps = Invoke-Section 'laps' {
 
 $uac = Invoke-Section 'uac' {
     $p = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    # Windows Installer installs a package with SYSTEM rights only when AlwaysInstallElevated is 1 in the
+    # machine policy AND in the user's own policy: the machine value alone does nothing. The per-user value
+    # is read from the loaded profiles (HKU), so the analyzer can tell a real privilege escalation from a
+    # half-set policy; alwaysInstallElevatedUserHives says how many profiles were there to look at.
+    $instPol = 'Software\Policies\Microsoft\Windows\Installer'
+    $perUser = @(); $hives = 0
+    foreach ($hive in @(Get-ChildItem -LiteralPath 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^S-1-5-21-[\d-]+$' })) {
+        $sid = "$($hive.PSChildName)"
+        $hives = $hives + 1
+        $v = Get-RegValue "Registry::HKEY_USERS\$sid\$instPol" 'AlwaysInstallElevated'
+        if ($null -ne $v) { $perUser += [ordered]@{ user = (Get-ProfileUser $sid); value = $v } }
+    }
     [ordered]@{
         enableLua                    = Get-RegValue $p 'EnableLUA'
         consentPromptBehaviorAdmin   = Get-RegValue $p 'ConsentPromptBehaviorAdmin'
         localAccountTokenFilterPolicy = Get-RegValue $p 'LocalAccountTokenFilterPolicy'
         filterAdministratorToken     = Get-RegValue $p 'FilterAdministratorToken'
         alwaysInstallElevated        = Get-RegValue 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Installer' 'AlwaysInstallElevated'
+        alwaysInstallElevatedUsers   = $perUser
+        alwaysInstallElevatedUserHives = $hives
     }
 }
 
@@ -921,6 +943,11 @@ $psLogging = Invoke-Section 'powershell' {
         # the engine is its assembly (System.Management.Automation 1.0.0.0 in the .NET 2.0 GAC).
         v2EngineVersion    = "$(Get-RegValue 'HKLM:\SOFTWARE\Microsoft\PowerShell\1\PowerShellEngine' 'PowerShellVersion')"
         v2EngineFile       = Test-Path -LiteralPath "$env:SystemRoot\assembly\GAC_MSIL\System.Management.Automation\1.0.0.0__31bf3856ad364e35\System.Management.Automation.dll"
+        # powershell.exe -Version 2 runs on the .NET 2.0 CLR (v2.0.50727, installed with the NetFx3
+        # optional feature): without mscorwks.dll the engine cannot start at all ("The version
+        # v2.0.50727 of the .NET Framework is not installed"), so the downgrade is not available
+        # however the feature is registered.
+        v2ClrFile          = Test-Path -LiteralPath "$env:SystemRoot\Microsoft.NET\Framework\v2.0.50727\mscorwks.dll"
     }
 }
 
@@ -1346,12 +1373,21 @@ $persistence = Invoke-Section 'persistence' {
     }
     $wl = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
     $p.winlogon = [ordered]@{ shell = "$(Get-RegValue $wl 'Shell')"; userinit = "$(Get-RegValue $wl 'Userinit')" }
-    # LSA packages: DLLs loaded into LSASS, which see every password typed at logon.
+    # LSA packages: DLLs loaded into LSASS. A security or authentication package takes part in
+    # authentication and sees the credentials used for it; a notification package is a password filter,
+    # and LSASS hands it every new password in clear ONLY if it exports InitializeChangeNotify (without
+    # that entry point LSASS drops it again, so changeNotify records which it is).
     $lsaKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
     $lsa = [ordered]@{}
     foreach ($kv in @(@('security', 'Security Packages'), @('authentication', 'Authentication Packages'), @('notification', 'Notification Packages'))) {
         $names = @(@(Get-RegValue $lsaKey $kv[1]) + @(Get-RegValue "$lsaKey\OSConfig" $kv[1]) | ForEach-Object { "$_".Trim().Trim('"') } | Where-Object { $_ } | Select-Object -Unique)
-        $lsa[$kv[0]] = @(foreach ($n in $names) { $si = Get-SignerInfo (Resolve-SystemDll $n); [ordered]@{ name = $n; exists = $si.exists; signer = $si.signer; status = $si.status } })
+        $lsa[$kv[0]] = @(foreach ($n in $names) {
+            $resolved = Resolve-SystemDll $n
+            $si = Get-SignerInfo $resolved
+            $e = [ordered]@{ name = $n; exists = $si.exists; signer = $si.signer; status = $si.status }
+            if ($kv[0] -eq 'notification') { $e['changeNotify'] = (Test-DllExport $resolved 'InitializeChangeNotify') }
+            $e
+        })
     }
     $p.lsa = $lsa
     foreach ($k in @(Get-ChildItem -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Print\Monitors' -ErrorAction SilentlyContinue)) {
@@ -1374,13 +1410,6 @@ function Get-KeyValue {
     # A value of a key already opened (Get-ChildItem / Get-Item), or $null.
     param($Key, [string]$Name)
     try { return $Key.GetValue($Name) } catch { return $null }
-}
-function Get-ProfileUser {
-    # The user a loaded hive (HKU\<SID>) belongs to: the leaf of its profile folder.
-    param([string]$Sid)
-    $p = "$(Get-RegValue "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$Sid" 'ProfileImagePath')"
-    if ($p) { return (Split-Path -Path $p -Leaf) }
-    return $Sid
 }
 function Get-IniScripts {
     # The scripts a local Group Policy scripts.ini or psscripts.ini lists ([Startup] 0CmdLine=...).

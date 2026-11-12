@@ -808,7 +808,11 @@ or, without one, when they have the same title.
   Windows starts from a load point (LSASS, the print spooler, netsh, network,
   credential and time providers, print processors, ServiceDlls, the .NET
   profiler, the crash debugger, the logon screen tools) and of Office COM add-ins,
-  with `Get-AuthenticodeSignature`. It lists the BITS jobs with
+  with `Get-AuthenticodeSignature`. Of a network provider DLL and of an LSA
+  notification package it also reads the export table, by parsing the file's
+  bytes, to tell whether the DLL registers `NPLogonNotify` or
+  `InitializeChangeNotify` and so is handed passwords: the DLL itself is never
+  loaded. It lists the BITS jobs with
   `Get-BitsTransfer -AllUsers` and, as SYSTEM, reads the F value of each SAM
   account (its RID), never the password hashes. Setup answer files, Group
   Policy Preferences files and PowerShell histories are read to count the

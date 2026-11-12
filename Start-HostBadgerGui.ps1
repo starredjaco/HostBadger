@@ -935,20 +935,59 @@ function Find-LatestReport {
     $f = @(Get-ChildItem -LiteralPath $Dir -File -Filter '*.html' -ErrorAction SilentlyContinue | Where-Object { Test-Path -LiteralPath ($_.FullName -replace '\.html$', '.csv') } | Sort-Object LastWriteTimeUtc -Descending)
     if ($f.Count) { return $f[0] }
 }
-function Get-PasswordSnapshots {
-    # The .hbx files that need a password: "HBX1" then mode 1. Mode 2 (certificate) is opened with the
-    # private key of the certificate store, no password.
+function Get-LocalSnapshotFiles {
+    # The snapshot files a path points at: the file itself, or every snapshot under a folder.
     param([string]$Path)
     if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return }
-    $files = if ((Get-Item -LiteralPath $Path).PSIsContainer) { @(Get-ChildItem -LiteralPath $Path -Recurse -File -Filter 'hostsnapshot_*.hbx' -ErrorAction SilentlyContinue) } else { @(Get-Item -LiteralPath $Path | Where-Object { $_.Extension -eq '.hbx' }) }
-    foreach ($f in $files) {
-        try {
-            $fs = [System.IO.File]::OpenRead($f.FullName)
-            try { $head = New-Object byte[] 5; $n = $fs.Read($head, 0, 5) } finally { $fs.Dispose() }
-            if ($n -eq 5 -and [Text.Encoding]::ASCII.GetString($head, 0, 4) -eq 'HBX1' -and $head[4] -eq 1) { $f }
-        }
-        catch { }
+    if ((Get-Item -LiteralPath $Path).PSIsContainer) {
+        return @(Get-ChildItem -LiteralPath $Path -Recurse -File -Filter 'hostsnapshot_*' -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in '.json', '.zip', '.hbx' })
     }
+    return @(Get-Item -LiteralPath $Path | Where-Object { $_.Extension -in '.json', '.zip', '.hbx' })
+}
+function Test-PasswordSnapshot {
+    # Does this file need a password? An .hbx that starts with "HBX1" then mode 1. Mode 2 (certificate)
+    # is opened with the private key of the certificate store, no password.
+    param($File)
+    if (-not $File -or "$($File.Extension)" -ne '.hbx') { return $false }
+    try {
+        $fs = [System.IO.File]::OpenRead($File.FullName)
+        try { $head = New-Object byte[] 5; $n = $fs.Read($head, 0, 5) } finally { $fs.Dispose() }
+        return ($n -eq 5 -and [Text.Encoding]::ASCII.GetString($head, 0, 4) -eq 'HBX1' -and $head[4] -eq 1)
+    }
+    catch { return $false }
+}
+function Get-PasswordSnapshots {
+    # Every snapshot under $Path that needs a password.
+    param([string]$Path)
+    foreach ($f in @(Get-LocalSnapshotFiles $Path | Where-Object { $_ })) { if (Test-PasswordSnapshot $f) { $f } }
+}
+function Get-LockedReportSnapshots {
+    # The password-encrypted snapshots that really stop the AI step on a report already written. That step
+    # needs the snapshot of that very collection (the analyzer matches the host and the minute the report
+    # names), so an .hbx counts only when it is named after a host of the report AND collected at that
+    # minute, and only when no readable snapshot of the same host and minute lies beside it. Any other
+    # encrypted snapshot in the folder, an older collection of the same host included, is skipped by the
+    # analyzer with a warning and must not stop the step.
+    param($Sources, $Hosts)
+    $files = @(foreach ($src in @($Sources | Where-Object { $_ })) { Get-LocalSnapshotFiles "$src" }) | Where-Object { $_ }
+    $out = @()
+    foreach ($h in @($Hosts | Where-Object { $_ })) {
+        $token = "$($h.name)" -replace '[^\w\-]', '_'
+        if (-not $token) { continue }
+        $minute = "$($h.collected)" -replace '\D'
+        if ($minute.Length -gt 12) { $minute = $minute.Substring(0, 12) }
+        $locked = @(); $readable = $false
+        foreach ($f in @($files)) {
+            if ($f.Name.IndexOf($token, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+            # hostsnapshot_<host>_<yyyyMMddHHmmss>: another time is another collection. A name without the
+            # time (renamed by hand) is judged by the host name alone.
+            if ($minute -and $f.Name -match '_(\d{14})\.' -and $Matches[1].Substring(0, 12) -ne $minute) { continue }
+            if (Test-PasswordSnapshot $f) { $locked += $f } else { $readable = $true }
+        }
+        if (-not $readable -and $locked.Count -gt 0) { $out += $locked[0] }
+    }
+    if ($out.Count -eq 0) { return }
+    return $out
 }
 function Get-WuSource {
     $wuSource = 'Microsoft Update (HTTPS to *.update.microsoft.com)'
@@ -2199,9 +2238,11 @@ function Invoke-Ai {
         # The step would ask for the password at a console this window does not have.
         else {
             Show-Results $target
-            $names = @(if ($script:Res -and $script:Res.Summary) { @($script:Res.Summary.hosts) | ForEach-Object { "$($_.name)" -replace '[^\w\-]', '_' } })
-            $locked = @(foreach ($src in $sources) { Get-PasswordSnapshots $src }) | Where-Object { $leaf = $_.Name; @($names | Where-Object { $leaf -like "*$_*" }).Count -gt 0 }
-            if (@($locked).Count) { [void][System.Windows.MessageBox]::Show("The snapshot of this report is encrypted with a password ($(@($locked)[0].Name)): type it under Snapshots already collected first.", 'HostBadger'); return }
+            # Only the snapshot of this very collection matters: an older encrypted one of the same host
+            # does not stop the step, and neither does any other .hbx in the folder.
+            $rHosts = @(if ($script:Res -and $script:Res.Summary) { @($script:Res.Summary.hosts) })
+            $locked = @(Get-LockedReportSnapshots -Sources $sources -Hosts $rHosts | Where-Object { $_ })
+            if ($locked.Count) { [void][System.Windows.MessageBox]::Show("The snapshot of this report is encrypted with a password ($($locked[0].Name)): type it under Snapshots already collected first.", 'HostBadger'); return }
         }
     }
     $s = Read-Settings

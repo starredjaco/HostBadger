@@ -6,6 +6,71 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are numbered major.minor: a new minor for new features and fixes, a
 new major if the snapshot or the JSON Lines format ever breaks.
 
+## [2.7] - 2026-11-12
+### Added
+- `data\stig-catalog.json` now records, per product, the PowerSTIG file and the
+  DISA STIG version and release it was built from (`V2R7`), and the date of the
+  build. The release was written by hand in three places before (the dashboard
+  labels in `lib\Checks.ps1`, the table in `tools\New-CoverageDoc.ps1`, the file
+  names in the converter) and could drift from the rules actually shipped; now
+  the report, the Results tab and `COVERAGE.md` all read it from the catalog, and
+  the regression fails if any of them names a release the catalog was not built
+  from, or if the catalog and `tools\Convert-PowerStigData.ps1` disagree about
+  which files HostBadger ships. The CIS benchmark versions in `COVERAGE.md` come
+  from `data\cis-map.json` the same way, and the ASD Essential Eight model
+  release is now one value (`$script:E8ModelVersion`). A catalog from an earlier
+  release still loads: it simply names no release.
+- `tools\Test-CatalogVersions.ps1`: a developer tool for a release that says
+  whether a newer DISA STIG or CIS benchmark sits in your local PowerSTIG or
+  ansible-lockdown clones, and whether the shipped catalogs still match the
+  converters. Like the other tools it reads local files only and downloads
+  nothing, and nothing in a run or a report depends on it: which framework
+  release HostBadger ships is a maintainer's decision, not a host finding.
+
+### Fixed
+- `powershell_v2_enabled` no longer promises a downgrade attack that the host
+  cannot run. `powershell -Version 2` runs on the .NET 2.0 CLR (v2.0.50727,
+  installed with the `NetFx3` optional feature): where that is missing the engine
+  does not start at all ("The version v2.0.50727 of the .NET Framework is not
+  installed"), so there is no way to escape AMSI, script block logging or
+  Constrained Language Mode through it. The collector records `v2ClrFile` (the
+  presence of `mscorwks.dll`, read-only) and the finding is Low, saying the
+  engine cannot start, instead of Medium. The feature is still reported, because
+  it is still installed and the Essential Eight still wants it removed, and a
+  snapshot from an older collector keeps Medium.
+- `always_install_elevated` no longer reports a privilege escalation that needs a
+  second policy nobody set. Windows Installer installs a package with SYSTEM
+  rights only when `AlwaysInstallElevated` is 1 in the machine policy **and** in
+  the user's own policy; the machine value alone installs nothing elevated. The
+  collector now reads the per-user policy from the loaded profiles
+  (`alwaysInstallElevatedUsers`, `alwaysInstallElevatedUserHives`), and the
+  finding is High only when a profile has it too (naming the users), Medium when
+  the machine policy is alone or no profile could be read. It stays a finding
+  either way: CIS and the STIG expect 0, and the user half can arrive with the
+  next policy refresh.
+- The AI step on a report already written (`-AiReport`) asked for the password of
+  any encrypted snapshot that happened to sit in the snapshot folder, an older
+  collection of the same host included, although it only needs the snapshot of
+  the collection the report was made from. In the window, whose runspace has no
+  host to ask, the question made the whole step fail ("a command that prompts
+  the user failed"), send and dry run alike; at a console it asked for a password
+  nobody needed. The analyzer now keeps only the snapshots of the host **and**
+  the minute the report names before looking at encryption, so an older `.hbx` is
+  simply skipped, and the window's own check for "type the password first" asks
+  the same question instead of refusing on any `.hbx` named after a host of the
+  report. A name without a collection time in it is still opened, since only its
+  content can tell.
+- The LSA package findings of `persistence_registry_hijack` said that every
+  package "sees the passwords typed at logon". A notification package is a
+  password filter: it is handed a new password in clear when one is *changed*,
+  and only if it exports `InitializeChangeNotify` - LSASS loads one that does not
+  and drops it again. The collector records `changeNotify` for notification
+  packages (the export table is parsed, the DLL is never loaded) and each finding
+  now says what the package actually sees, a notification package without that
+  entry point being reported a step lower (its code still runs inside LSASS, but
+  it sees no password). Security and authentication packages are described as
+  taking part in authentication.
+
 ## [2.6] - 2026-11-11
 ### Fixed
 - `persistence_credential_capture` no longer accuses every third-party network

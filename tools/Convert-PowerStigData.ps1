@@ -128,7 +128,22 @@ foreach ($prod in $Files.Keys | Sort-Object) {
 $sorted = @($catalog | Sort-Object { $_.p }, { $_.id })
 $dir = Split-Path $OutCatalog -Parent
 if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-$json = ConvertTo-Json -InputObject $sorted -Depth 6 -Compress
+# The release each product was built from, so the analyzer and COVERAGE.md read it from the catalog
+# instead of carrying their own copy: a PowerSTIG file name ends in <version>.<release> (V2R7 for
+# WindowsClient-11-2.7.xml), which is the STIG version and release DISA published.
+$releases = [ordered]@{}
+foreach ($prod in $Files.Keys | Sort-Object) {
+    $file = "$($Files[$prod])"
+    $rel = if ($file -match '-(\d+)\.(\d+)\.xml$') { "V$($Matches[1])R$($Matches[2])" } else { '' }
+    $releases[$prod] = [ordered]@{ file = $file; release = $rel }
+}
+$out = [ordered]@{
+    source   = 'DISA STIG content, from the processed STIG data of Microsoft PowerSTIG (MIT); built by tools\Convert-PowerStigData.ps1'
+    built    = (Get-Date).ToString('yyyy-MM-dd')
+    releases = $releases
+    rules    = $sorted
+}
+$json = ConvertTo-Json -InputObject $out -Depth 7 -Compress
 [System.IO.File]::WriteAllText($OutCatalog, $json, (New-Object System.Text.UTF8Encoding($false)))
 
 # The values the collector reads: one line per (scope, key, name), case-insensitive unique.

@@ -349,7 +349,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:HostBadgerVersion = '2.6'
+$script:HostBadgerVersion = '2.7'
 . (Join-Path $PSScriptRoot 'lib\Common.ps1')
 . (Join-Path $PSScriptRoot 'lib\Checks.ps1')
 . (Join-Path $PSScriptRoot 'lib\AI.ps1')
@@ -359,7 +359,7 @@ $script:HostBadgerVersion = '2.6'
 Write-Host @'
      _.--""--._
    .'  |    |  '.
-  /    |    |    \      HostBadger v2.6
+  /    |    |    \      HostBadger v2.7
  |  (o)|    |(o)  |     Windows host hardening
  |     |    |     |     read-only snapshots, offline analysis
   \    '.__.'    /
@@ -484,6 +484,19 @@ if ($AiReport) {
             @($reportHosts.Keys | Where-Object { $leaf.ToUpper().Contains(($_ -replace '[^\w\-]', '_')) }).Count -gt 0
         })
     if ($named.Count -ge $reportHosts.Count) { $files = $named }
+    # And only the collections this report is made of: the file name carries the time
+    # (hostsnapshot_<host>_<yyyyMMddHHmmss>), and the report keeps the minute. Without this an older
+    # snapshot of the same host would be opened for nothing, and an encrypted one would ask for a
+    # password this step does not need - in a window, which cannot ask, the step would fail instead.
+    # A name without the time (renamed by hand) is kept: only its content can tell.
+    $minutes = @($fromReport.Hosts | ForEach-Object { "$($_.Collected)" -replace '\D' } | Where-Object { $_ } | ForEach-Object { if ($_.Length -gt 12) { $_.Substring(0, 12) } else { $_ } })
+    if ($minutes.Count -gt 0) {
+        $sameTime = @($files | Where-Object {
+                $leaf = Split-Path -Leaf $_
+                -not ($leaf -match '_(\d{14})\.') -or $minutes -contains $Matches[1].Substring(0, 12)
+            })
+        if ($sameTime.Count -ge $reportHosts.Count) { $files = $sameTime }
+    }
     . $openHbx
     $latest = @{}
     $readIndex = 0

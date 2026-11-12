@@ -82,7 +82,9 @@ function Get-StigCompliantValue($e) {
 }
 $stigMachine = New-Object System.Collections.Generic.List[object]
 $stigUser = New-Object System.Collections.Generic.List[object]
-$stigEntries = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\data\stig-catalog.json')))
+# The catalog is an object with its releases and its rules; an older one is the rules alone.
+$stigRaw = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\data\stig-catalog.json')))
+$stigEntries = if ($stigRaw.PSObject.Properties['rules']) { $stigRaw.rules } else { $stigRaw }
 # Kernel drivers: stock ones whose hashes match nothing, and two from the LOLDrivers catalog shipped in
 # data\ (taken from it, so the scenario follows a catalog update): RTCore64.sys, a verified vulnerable
 # driver, and the first verified malicious one.
@@ -192,8 +194,9 @@ $s = [ordered]@{
         administratorsReadable = $true
     }
     laps                 = [ordered]@{ windowsLapsPolicyRoot = 'gpo'; windowsLapsBackupDirectory = 2; windowsLapsPasswordExpirationProtection = 1; legacyLapsEnabled = $null; legacyLapsCseInstalled = $false }
-    uac                  = [ordered]@{ enableLua = 1; consentPromptBehaviorAdmin = 2; localAccountTokenFilterPolicy = $null; filterAdministratorToken = 1; alwaysInstallElevated = $null }
-    powershell           = [ordered]@{ scriptBlockLogging = 1; moduleLogging = 1; transcription = 1; v2EngineVersion = ''; v2EngineFile = $false }
+    uac                  = [ordered]@{ enableLua = 1; consentPromptBehaviorAdmin = 2; localAccountTokenFilterPolicy = $null; filterAdministratorToken = 1; alwaysInstallElevated = $null
+        alwaysInstallElevatedUsers = @(); alwaysInstallElevatedUserHives = 1 }
+    powershell           = [ordered]@{ scriptBlockLogging = 1; moduleLogging = 1; transcription = 1; v2EngineVersion = ''; v2EngineFile = $false; v2ClrFile = $false }
     audit                = [ordered]@{ processCreationIncludeCmdLine = 1; securityLogMaxSizeBytes = 1073741824; subcategories = $fullAudit }
     securityPolicy       = [ordered]@{
         systemAccess = [ordered]@{ PasswordHistorySize = 24; MaximumPasswordAge = 365; MinimumPasswordAge = 1; MinimumPasswordLength = 14; PasswordComplexity = 1; ClearTextPassword = 0
@@ -289,7 +292,7 @@ $s = [ordered]@{
         lsa = [ordered]@{
             security = @(foreach ($p in 'kerberos', 'msv1_0', 'schannel', 'wdigest', 'tspkg', 'pku2u', 'cloudAP') { [ordered]@{ name = $p; exists = $true; signer = 'Microsoft Windows'; status = 'Valid' } })
             authentication = @([ordered]@{ name = 'msv1_0'; exists = $true; signer = 'Microsoft Windows'; status = 'Valid' })
-            notification = @([ordered]@{ name = 'scecli'; exists = $true; signer = 'Microsoft Windows'; status = 'Valid' }) }
+            notification = @([ordered]@{ name = 'scecli'; exists = $true; signer = 'Microsoft Windows'; status = 'Valid'; changeNotify = $true }) }
         printMonitors = @([ordered]@{ name = 'Local Port'; driver = 'localspl.dll'; exists = $true; signer = 'Microsoft Windows'; status = 'Valid' }, [ordered]@{ name = 'Standard TCP/IP Port'; driver = 'tcpmon.dll'; exists = $true; signer = 'Microsoft Windows'; status = 'Valid' })
         netshHelpers = @([ordered]@{ name = 'ifmon'; dll = 'ifmon.dll'; exists = $true; signer = 'Microsoft Windows'; status = 'Valid' }, [ordered]@{ name = 'nshhttp'; dll = 'nshhttp.dll'; exists = $true; signer = 'Microsoft Windows'; status = 'Valid' })
     }
@@ -434,8 +437,11 @@ switch ($Scenario) {
             [ordered]@{ path = 'CORP/Domain Admins'; sid = "$domainSid-512"; class = 'Group' }, [ordered]@{ path = 'CORP/jsmith'; sid = "$domainSid-1342"; class = 'User' },
             [ordered]@{ path = 'CORP/Helpdesk'; sid = "$domainSid-1201"; class = 'Group' })
         $s.laps = [ordered]@{ windowsLapsPolicyRoot = $null; windowsLapsBackupDirectory = $null; windowsLapsPasswordExpirationProtection = $null; legacyLapsEnabled = $null; legacyLapsCseInstalled = $false }
-        $s.uac = [ordered]@{ enableLua = 0; consentPromptBehaviorAdmin = 0; localAccountTokenFilterPolicy = 1; filterAdministratorToken = 0; alwaysInstallElevated = 1 }
-        $s.powershell = [ordered]@{ scriptBlockLogging = $null; moduleLogging = $null; transcription = $null; v2EngineVersion = '2.0'; v2EngineFile = $true }
+        # The machine policy and one user's policy: what Windows Installer needs to install an .msi elevated.
+        $s.uac = [ordered]@{ enableLua = 0; consentPromptBehaviorAdmin = 0; localAccountTokenFilterPolicy = 1; filterAdministratorToken = 0; alwaysInstallElevated = 1
+            alwaysInstallElevatedUsers = @([ordered]@{ user = 'jsmith'; value = 1 }); alwaysInstallElevatedUserHives = 2 }
+        # The 2.0 engine with the .NET 2.0 CLR it needs (this host has NetFx3 on), so the downgrade works.
+        $s.powershell = [ordered]@{ scriptBlockLogging = $null; moduleLogging = $null; transcription = $null; v2EngineVersion = '2.0'; v2EngineFile = $true; v2ClrFile = $true }
         $s.audit = [ordered]@{ processCreationIncludeCmdLine = $null; securityLogMaxSizeBytes = 20971520
             subcategories = @($allAudit | ForEach-Object { $v = if ($_[1] -in @('Logon', 'Credential Validation')) { 1 } else { 0 }; Audit $_[0] $v $_[1] }) }
         $s.defender.puaProtection = 0
@@ -588,7 +594,8 @@ switch ($Scenario) {
             psHistory = @([ordered]@{ profile = 'jsmith'; lines = 3; kinds = @('plain-text SecureString (2)', 'net use with a password (1)') }) }
         $s.persistence.wmiConsumers = @([ordered]@{ name = 'UpdaterCheck'; type = 'CommandLineEventConsumer'; command = 'C:\Users\Public\upd.exe -q'; engine = ''; scriptLength = 0; bound = $true; filter = "SELECT * FROM __InstanceModificationEvent WITHIN 60 WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System'" })
         $s.persistence.ifeoDebuggers = @([ordered]@{ image = 'sethc.exe'; debugger = 'C:\Windows\System32\cmd.exe'; wow64 = $false })
-        $s.persistence.lsa.security = @($s.persistence.lsa.security) + @([ordered]@{ name = 'mspwfilt'; exists = $true; signer = $null; status = 'NotSigned' })
+        # An unsigned password filter that does register InitializeChangeNotify: it is handed every new password.
+        $s.persistence.lsa.notification = @($s.persistence.lsa.notification) + @([ordered]@{ name = 'mspwfilt'; exists = $true; signer = $null; status = 'NotSigned'; changeNotify = $true })
         $s.persistence.printMonitors = @($s.persistence.printMonitors) + @([ordered]@{ name = 'Contoso Print Monitor'; driver = 'ctxpmon.dll'; exists = $true; signer = 'Contoso Ltd.'; status = 'Valid' })
         $s.certificates.roots = @($s.certificates.roots) + @([ordered]@{ thumbprint = '0F1E2D3C4B5A69788796A5B4C3D2E1F00F1E2D3C'; store = 'machine'; subject = 'CN=Fabrikam Inspection CA, O=Fabrikam Web Filter'; notAfterUtc = '2035-01-01T00:00:00Z'; selfSigned = $true; hasPrivateKey = $true; inMicrosoftProgram = $false })
         $s.wifi = @($s.wifi) + @([ordered]@{ name = 'CafeGuest-5G'; authentication = 'open'; encryption = 'none'; connectionMode = 'auto'; nonBroadcast = $false })

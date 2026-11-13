@@ -566,9 +566,35 @@ $script:ExploitDbUrl = 'https://gitlab.com/exploit-database/exploitdb/-/raw/main
 # copy that is not a git clone reads its version line (the test hook HOSTBADGER_UPDATE_URL replaces it).
 $script:HostBadgerMainUrl = 'https://raw.githubusercontent.com/g4bri-3l3/HostBadger/main/HostBadger.ps1'
 
+# An address set in the environment (an internal gateway, or the test hooks above) replaces a shipped
+# one only when it is https, or http on this machine. These variables are read at run time, so the
+# list of addresses the safety review finds in this file is not the whole story: without this rule a
+# variable, which anything running as this user can set, would be enough to send a prompt - or the
+# Gemini key, which travels in a header - wherever someone likes. A refused address stops the
+# request and never falls back to the shipped one, so nothing goes to an address the user did not
+# mean. The effective address is printed, so the run log says where the data went. Returns the
+# address to use, or '' when it was refused.
+function Resolve-HbUri {
+    param([string]$Override, [string]$Default, [string]$Label)
+    if (-not $Override) { return $Default }
+    $u = $null
+    if (-not [Uri]::TryCreate($Override, [UriKind]::Absolute, [ref]$u)) {
+        Write-Host "$Label`: the address set in the environment is not a URL. Nothing is requested." -ForegroundColor Red
+        return ''
+    }
+    if ($u.Scheme -ne 'https' -and -not ($u.Scheme -eq 'http' -and $u.IsLoopback)) {
+        Write-Host "$Label`: the address set in the environment is $($u.Scheme)://$($u.Authority), which is not https. Nothing is requested." -ForegroundColor Red
+        return ''
+    }
+    Write-Host "$Label`: using $($u.Scheme)://$($u.Authority), set in the environment." -ForegroundColor DarkGray
+    return $Override
+}
+
 # -Headers: request headers (the NVD API key). -Binary: the body as bytes (the EPSS file is gzip).
 function Get-CatalogText {
     param([string]$Uri, [string]$Label, [int]$TimeoutSeconds = 60, [hashtable]$Headers = @{}, [switch]$Binary)
+    # An address Resolve-HbUri refused: it has already said why.
+    if (-not $Uri) { return $null }
     Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $client = New-Object System.Net.Http.HttpClient
@@ -591,14 +617,14 @@ function Get-CatalogText {
 
 function Get-KevCatalogOnline {
     param([int]$TimeoutSeconds = 60)
-    $uri = if ($env:HOSTBADGER_KEV_URL) { $env:HOSTBADGER_KEV_URL } else { $script:KevFeedUrl }
+    $uri = Resolve-HbUri $env:HOSTBADGER_KEV_URL $script:KevFeedUrl 'CISA KEV'
     return Get-CatalogText -Uri $uri -Label 'CISA KEV' -TimeoutSeconds $TimeoutSeconds
 }
 
 # The caller converts it (ConvertFrom-LolDrivers in lib\Checks.ps1).
 function Get-LolDriversOnline {
     param([int]$TimeoutSeconds = 180)
-    $uri = if ($env:HOSTBADGER_DRIVERS_URL) { $env:HOSTBADGER_DRIVERS_URL } else { $script:LolDriversUrl }
+    $uri = Resolve-HbUri $env:HOSTBADGER_DRIVERS_URL $script:LolDriversUrl 'LOLDrivers'
     return Get-CatalogText -Uri $uri -Label 'LOLDrivers' -TimeoutSeconds $TimeoutSeconds
 }
 
@@ -608,7 +634,7 @@ function Get-HostBadgerLatestVersion {
     # The version on the main branch ($script:HostBadgerVersion in its HostBadger.ps1), '' when it
     # cannot be read. One GET; nothing about this machine is sent.
     param([int]$TimeoutSeconds = 30)
-    $uri = if ($env:HOSTBADGER_UPDATE_URL) { $env:HOSTBADGER_UPDATE_URL } else { $script:HostBadgerMainUrl }
+    $uri = Resolve-HbUri $env:HOSTBADGER_UPDATE_URL $script:HostBadgerMainUrl 'HostBadger version'
     $text = Get-CatalogText -Uri $uri -Label 'HostBadger version' -TimeoutSeconds $TimeoutSeconds
     if ("$text" -match "\`$script:HostBadgerVersion = '(\d+(\.\d+)+)'") { return $Matches[1] }
     return ''
@@ -616,7 +642,7 @@ function Get-HostBadgerLatestVersion {
 
 function Get-ExtensionCatalogOnline {
     param([int]$TimeoutSeconds = 120)
-    $uri = if ($env:HOSTBADGER_EXTENSIONS_URL) { $env:HOSTBADGER_EXTENSIONS_URL } else { $script:ExtensionSentryUrl }
+    $uri = Resolve-HbUri $env:HOSTBADGER_EXTENSIONS_URL $script:ExtensionSentryUrl 'browser extensions'
     return Get-CatalogText -Uri $uri -Label 'browser extensions' -TimeoutSeconds $TimeoutSeconds
 }
 
@@ -628,8 +654,8 @@ function Get-ExtensionCatalogOnline {
 # (the raw text of each), or nothing for a list that did not come back.
 function Get-ExploitCatalogOnline {
     param([int]$TimeoutSeconds = 180)
-    $msfUri = if ($env:HOSTBADGER_MSF_URL) { $env:HOSTBADGER_MSF_URL } else { $script:MsfMetadataUrl }
-    $edbUri = if ($env:HOSTBADGER_EXPLOITDB_URL) { $env:HOSTBADGER_EXPLOITDB_URL } else { $script:ExploitDbUrl }
+    $msfUri = Resolve-HbUri $env:HOSTBADGER_MSF_URL $script:MsfMetadataUrl 'Metasploit modules'
+    $edbUri = Resolve-HbUri $env:HOSTBADGER_EXPLOITDB_URL $script:ExploitDbUrl 'Exploit-DB index'
     $msf = Get-CatalogText -Uri $msfUri -Label 'Metasploit modules' -TimeoutSeconds $TimeoutSeconds
     $edb = Get-CatalogText -Uri $edbUri -Label 'Exploit-DB index' -TimeoutSeconds $TimeoutSeconds
     return @{ Msf = $msf; Edb = $edb }
@@ -644,7 +670,8 @@ function Get-ExploitCatalogOnline {
 # back whole is left out rather than judged on part of it. Returns @{ id = versions }.
 function Get-ChocoCatalogOnline {
     param([int]$TimeoutSeconds = 30)
-    $base = if ($env:HOSTBADGER_CHOCO_URL) { $env:HOSTBADGER_CHOCO_URL } else { $script:ChocoApiUrl }
+    $base = Resolve-HbUri $env:HOSTBADGER_CHOCO_URL $script:ChocoApiUrl 'Chocolatey'
+    if (-not $base) { return @{} }
     $out = @{}
     foreach ($m in $script:ChocoProductMap) {
         $all = New-Object System.Collections.Generic.List[object]
@@ -680,8 +707,9 @@ function Get-ChocoCatalogOnline {
 # come back whole is left out. Returns @{ Products; Epss; EpssDate } (no product when nothing came back).
 function Get-CveCatalogOnline {
     param([int]$TimeoutSeconds = 120)
-    $base = if ($env:HOSTBADGER_NVD_URL) { $env:HOSTBADGER_NVD_URL } else { $script:NvdApiUrl }
-    $epssUri = if ($env:HOSTBADGER_EPSS_URL) { $env:HOSTBADGER_EPSS_URL } else { $script:EpssUrl }
+    $base = Resolve-HbUri $env:HOSTBADGER_NVD_URL $script:NvdApiUrl 'NVD'
+    if (-not $base) { return @{ Products = @{}; Epss = @{}; EpssDate = '' } }
+    $epssUri = Resolve-HbUri $env:HOSTBADGER_EPSS_URL $script:EpssUrl 'FIRST EPSS'
     $headers = @{}; if ($env:NVD_API_KEY) { $headers['apiKey'] = $env:NVD_API_KEY }
     $pause = if ($env:NVD_API_KEY) { 1000 } else { 6500 }
     if ($env:HOSTBADGER_NVD_PAUSE_MS) { $pause = [int]$env:HOSTBADGER_NVD_PAUSE_MS }
@@ -736,7 +764,7 @@ function Get-CveCatalogOnline {
 # The caller converts it (ConvertFrom-EolCatalog in lib\Checks.ps1).
 function Get-EolCatalogOnline {
     param([int]$TimeoutSeconds = 120)
-    $uri = if ($env:HOSTBADGER_EOL_URL) { $env:HOSTBADGER_EOL_URL } else { $script:EolApiUrl }
+    $uri = Resolve-HbUri $env:HOSTBADGER_EOL_URL $script:EolApiUrl 'endoflife.date'
     return Get-CatalogText -Uri $uri -Label 'endoflife.date' -TimeoutSeconds $TimeoutSeconds
 }
 
@@ -755,8 +783,11 @@ function Invoke-GeminiAnalysis {
         generationConfig   = @{ temperature = 0.2; responseMimeType = 'application/json' }
     } | ConvertTo-Json -Depth 10
     # The key goes in a header, not in the URL, so it stays out of proxy logs.
-    # HOSTBADGER_GEMINI_BASEURL points at an internal gateway (or at the test endpoint).
-    $base = if ($env:HOSTBADGER_GEMINI_BASEURL) { $env:HOSTBADGER_GEMINI_BASEURL.TrimEnd('/') } else { 'https://generativelanguage.googleapis.com' }
+    # HOSTBADGER_GEMINI_BASEURL points at an internal gateway (or at the test endpoint); it is
+    # accepted only as https, or http on this machine, and a refused address sends nothing at all
+    # rather than quietly falling back to Google with a prompt meant for a gateway.
+    $base = (Resolve-HbUri $env:HOSTBADGER_GEMINI_BASEURL 'https://generativelanguage.googleapis.com' 'Gemini').TrimEnd('/')
+    if (-not $base) { Write-Host 'Nothing was sent. Set HOSTBADGER_GEMINI_BASEURL to an https address, or clear it to use Gemini itself.' -ForegroundColor Red; return $null }
     $uri = "$base/v1beta/models/${Model}:generateContent"
     $transient = @(429, 500, 502, 503, 504)
     $result = $null

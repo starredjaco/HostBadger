@@ -86,7 +86,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:CollectorVersion = '2.7'
+$script:CollectorVersion = '2.8'
 $script:SchemaVersion = 1
 $script:Errors = New-Object System.Collections.Generic.List[object]
 $script:Sections = New-Object System.Collections.Generic.List[string]

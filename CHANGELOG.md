@@ -6,6 +6,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are numbered major.minor: a new minor for new features and fixes, a
 new major if the snapshot or the JSON Lines format ever breaks.
 
+## [2.8] - 2026-11-13
+### Security
+- A snapshot is a file from a host that may itself be compromised, and what it
+  says about its own size is no longer taken on trust. `Read-SnapshotText`
+  refuses a file larger than 256 MB before reading it, and `Read-ZipSnapshot`
+  reads the JSON inside a zip in pieces with the same bound instead of
+  `ReadToEnd`, so a small archive that expands to gigabytes is refused by name
+  rather than taking the analyzer's memory with it. A real snapshot of a busy
+  server, STIG rules and all, is a few tens of megabytes: these are sanity
+  bounds, not performance limits.
+- `Unprotect-SnapshotBytes` bounds the PBKDF2 iteration count it reads from an
+  `.hbx` header (10000 to 5000000) before deriving the key. That count sits in
+  a header nothing has authenticated yet and it drives the derivation that runs
+  *before* the HMAC can say whether the file is genuine, so a crafted file
+  claiming two billion iterations would have spent minutes of CPU on a snapshot
+  that was never authentic. The format itself is unchanged: the collector still
+  writes 600000 (PBKDF2-SHA256) or 1300000 (the SHA-1 fallback), and
+  `Protect-SnapshotBytes` and `Unprotect-SnapshotBytes` stay in step.
+- The addresses in `HOSTBADGER_GEMINI_BASEURL` and the nine `HOSTBADGER_*_URL`
+  test hooks are now checked before they are used (`Resolve-HbUri` in
+  `lib\AI.ps1`): an address set in the environment replaces a shipped one only
+  when it is https, or http on this machine (the regression's local listener).
+  These variables are read at run time, so the list of addresses the safety
+  review finds in the source was not the whole story: without this rule one
+  variable, which anything running as this user can set, was enough to send a
+  prompt - or the Gemini key, which travels in a header - anywhere. A refused
+  address makes no request at all and never falls back to the shipped one, so a
+  prompt meant for an internal gateway is not quietly sent to Google instead.
+  The effective address is printed whenever a variable overrides a shipped one,
+  so the run log says where the data went.
+
 ## [2.7] - 2026-11-12
 ### Added
 - `data\stig-catalog.json` now records, per product, the PowerSTIG file and the

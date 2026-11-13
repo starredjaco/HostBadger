@@ -20,6 +20,8 @@ rollback_*.json
 CLAUDE.md
 .claude/
 output/
+# Threat model runs: private review material (attack paths, host data), never committed.
+threat-model/
 session_*.txt
 testhtml.txt
 *_kev.json

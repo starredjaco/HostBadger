@@ -85,6 +85,24 @@ function Get-SnapshotFiles {
     return $files.ToArray()
 }
 
+# A snapshot is a file from a host that may itself be compromised, so what it says about its own
+# size is not taken on trust: the file on disk and the JSON inside a zip are both bounded before
+# they reach memory, and the key derivation of an encrypted one is bounded before it runs. A real
+# snapshot of a busy server, STIG rules and all, is a few tens of megabytes; these limits are a
+# sanity bound, not a performance one, and a file that hits one is refused by name.
+$script:MaxSnapshotFileBytes = 256MB
+$script:MaxSnapshotChars = 256MB
+$script:MaxKdfIterations = 5000000
+
+function Test-SnapshotSize {
+    # The file on disk, before anything reads it whole.
+    param([string]$Path)
+    $len = (Get-Item -LiteralPath $Path).Length
+    if ($len -gt $script:MaxSnapshotFileBytes) {
+        throw "$Path is $([int]($len / 1MB)) MB, larger than the $([int]($script:MaxSnapshotFileBytes / 1MB)) MB a snapshot may be: not read."
+    }
+}
+
 # Encrypted snapshots (.hbx, written by the collector with -EncryptPassword or -EncryptCertificate;
 # the format is described above Protect-SnapshotBytes in Collect-HostSnapshot.ps1). The password is
 # $script:HbxPassword (a SecureString, set by HostBadger.ps1); a certificate's private key comes
@@ -119,6 +137,12 @@ function Unprotect-SnapshotBytes {
     if ($Data[4] -ne 1 -or $Data.Length -lt 75) { throw "$Path is damaged or of an unknown format." }
     if (-not $script:HbxPassword) { throw "$Path is encrypted with a password: give -SnapshotPassword." }
     $kdfId = $Data[5]; $iter = [BitConverter]::ToInt32($Data, 6)
+    # The iteration count comes out of a header nothing has authenticated yet, and it drives the key
+    # derivation before the tag below can say whether the file is genuine. The collector writes
+    # 600000 (PBKDF2-SHA256) or 1300000 (the SHA-1 fallback), so a count outside this range is
+    # either damage or a file asking this machine to spend minutes on a snapshot that is not even
+    # authentic; too low a one would mean a file whose key derivation was deliberately weakened.
+    if ($iter -lt 10000 -or $iter -gt $script:MaxKdfIterations) { throw "$Path is damaged or of an unknown format (iteration count $iter)." }
     $salt = [byte[]]$Data[10..25]; $iv = [byte[]]$Data[26..41]
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($script:HbxPassword)
     try { $pw = [Text.Encoding]::UTF8.GetBytes([Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)) }
@@ -146,13 +170,27 @@ function Read-ZipSnapshot {
         $entry = @($zip.Entries | Where-Object { $_.Name -match '(?i)^hostsnapshot_.*\.json$' }) | Select-Object -First 1
         if (-not $entry) { throw "no hostsnapshot_*.json inside $Path" }
         $reader = New-Object System.IO.StreamReader($entry.Open(), [System.Text.Encoding]::UTF8)
-        try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+        # Read it in pieces rather than whole: the entry says how large it is, but only the bytes
+        # that actually arrive can be trusted, and a crafted zip can hold a very long one.
+        try {
+            $sb = New-Object System.Text.StringBuilder
+            $buf = New-Object char[] 65536
+            while (($read = $reader.Read($buf, 0, $buf.Length)) -gt 0) {
+                if (($sb.Length + $read) -gt $script:MaxSnapshotChars) {
+                    throw "the snapshot inside $Path is larger than $([int]($script:MaxSnapshotChars / 1MB)) MB: not read."
+                }
+                [void]$sb.Append($buf, 0, $read)
+            }
+            return $sb.ToString()
+        }
+        finally { $reader.Dispose() }
     }
     finally { $zip.Dispose() }
 }
 
 function Read-SnapshotText {
     param([string]$Path)
+    Test-SnapshotSize $Path
     if ($Path -match '(?i)\.hbx$') {
         $plain = Unprotect-SnapshotBytes -Data ([System.IO.File]::ReadAllBytes($Path)) -Path $Path
         return Read-ZipSnapshot -Stream (New-Object System.IO.MemoryStream -ArgumentList (, $plain)) -Path $Path
